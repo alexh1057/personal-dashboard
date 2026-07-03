@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f1117">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dashboard">
+<title>Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<main id="app">
+
+  <!-- ============ SECTION 1: LEARNINGS ============ -->
+  <section id="tab-learn" class="tab active">
+    <header class="section-head">
+      <h1>Learnings</h1>
+      <div class="headline-stats">
+        <div class="stat-pill">
+          <span class="stat-num" id="learn-count">0</span>
+          <span class="stat-label">captured</span>
+        </div>
+        <div class="stat-pill accent">
+          <span class="stat-num" id="review-points">0</span>
+          <span class="stat-label">review pts</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="card">
+      <h2>Capture a learning</h2>
+      <textarea id="learning-input" rows="3" placeholder="What did you learn or notice today?"></textarea>
+      <div class="form-row">
+        <input type="text" id="learning-category" placeholder="Category (optional)" list="category-list">
+        <datalist id="category-list"></datalist>
+        <button class="btn primary" id="add-learning">Add</button>
+      </div>
+    </div>
+
+    <div class="card" id="spaced-rep-card" hidden>
+      <h2>Spaced repetition</h2>
+      <p class="hint" id="spaced-rep-msg"></p>
+      <blockquote id="spaced-rep-item" hidden></blockquote>
+    </div>
+
+    <div class="card">
+      <h2>Review rewards</h2>
+      <div class="review-buttons">
+        <button class="btn review" id="review-daily">
+          <span class="review-title">Daily</span>
+          <span class="review-sub">1 from past 7 days · +1 pt</span>
+        </button>
+        <button class="btn review" id="review-weekly">
+          <span class="review-title">Weekly</span>
+          <span class="review-sub">3 from past month · +3 pts</span>
+        </button>
+        <button class="btn review" id="review-monthly">
+          <span class="review-title">Monthly</span>
+          <span class="review-sub">5 from past quarter · +5 pts</span>
+        </button>
+      </div>
+      <div id="review-area" hidden>
+        <h3 id="review-area-title"></h3>
+        <ul id="review-items" class="review-list"></ul>
+        <button class="btn primary" id="review-complete">Review complete ✓</button>
+      </div>
+      <p class="hint" id="review-msg"></p>
+    </div>
+
+    <div class="card">
+      <div class="card-head-row">
+        <h2>Session log</h2>
+        <div class="seg-toggle" id="learn-view-toggle">
+          <button class="seg active" data-view="list">List</button>
+          <button class="seg" data-view="palace">Memory palace</button>
+        </div>
+      </div>
+      <ul id="learning-list" class="learning-list"></ul>
+      <div id="memory-palace" class="palace" hidden></div>
+      <p class="empty" id="learn-empty">Nothing captured yet this session. Learnings live in memory only — they reset when you close the page.</p>
+    </div>
+  </section>
+
+  <!-- ============ SECTION 2: LIFTS ============ -->
+  <section id="tab-lift" class="tab">
+    <header class="section-head">
+      <h1>Strength</h1>
+    </header>
+
+    <div class="card">
+      <h2>Log a top set</h2>
+      <div class="form-grid">
+        <label>Lift
+          <select id="lift-select">
+            <option>Bench Press</option>
+            <option>Trap Bar Deadlift</option>
+            <option>Overhead Press</option>
+            <option>High Bar Squat</option>
+          </select>
+        </label>
+        <label>Weight (kg)
+          <input type="number" id="lift-weight" inputmode="decimal" min="0" step="0.5" placeholder="e.g. 100">
+        </label>
+        <label>Reps
+          <select id="lift-reps">
+            <option value="3">3</option>
+            <option value="5">5</option>
+          </select>
+        </label>
+        <label>RPE
+          <select id="lift-rpe"></select>
+        </label>
+        <label class="full">Date
+          <input type="date" id="lift-date">
+        </label>
+        <label class="full">Session note (optional)
+          <input type="text" id="lift-note" placeholder="felt strong, tired, etc.">
+        </label>
+      </div>
+      <div class="e1rm-preview" id="e1rm-preview" hidden></div>
+      <button class="btn primary full-width" id="add-lift">Log set</button>
+    </div>
+
+    <div class="card">
+      <h2>Estimated 1RM progression</h2>
+      <div class="seg-toggle" id="chart-lift-toggle"></div>
+      <div id="lift-chart"></div>
+      <p class="empty" id="chart-empty">Log sets to see your e1RM trend.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head-row">
+        <h2>History</h2>
+        <div class="seg-toggle" id="history-toggle">
+          <button class="seg active" data-range="today">Today</button>
+          <button class="seg" data-range="week">Week</button>
+          <button class="seg" data-range="prs">All-time PRs</button>
+        </div>
+      </div>
+      <ul id="lift-history" class="history-list"></ul>
+      <p class="empty" id="history-empty">No entries yet.</p>
+    </div>
+  </section>
+
+  <!-- ============ SECTION 3: DEEP WORK ============ -->
+  <section id="tab-focus" class="tab">
+    <header class="section-head">
+      <h1>Deep Work</h1>
+      <div class="headline-stats">
+        <div class="stat-pill accent">
+          <span class="stat-num" id="dw-score">0</span>
+          <span class="stat-label">score</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="card timer-card">
+      <div id="timer-display">25:00</div>
+      <div class="duration-row" id="duration-presets">
+        <button class="chip" data-min="25">25m</button>
+        <button class="chip" data-min="50">50m</button>
+        <button class="chip" data-min="90">90m</button>
+        <input type="number" id="custom-min" inputmode="numeric" min="1" max="240" placeholder="Custom">
+      </div>
+      <input type="text" id="focus-area" placeholder="Focus area (optional)">
+      <div class="timer-controls">
+        <button class="btn primary" id="timer-start">Start</button>
+        <button class="btn danger" id="timer-stop" hidden>Stop</button>
+      </div>
+      <p class="hint" id="timer-hint"></p>
+    </div>
+
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="stats-grid">
+        <div class="stat-box"><span class="stat-num" id="dw-today-n">0</span><span class="stat-label">sessions today</span></div>
+        <div class="stat-box"><span class="stat-num" id="dw-week-n">0</span><span class="stat-label">this week</span></div>
+        <div class="stat-box"><span class="stat-num" id="dw-month-n">0</span><span class="stat-label">this month</span></div>
+        <div class="stat-box"><span class="stat-num" id="dw-today-h">0h</span><span class="stat-label">hrs today</span></div>
+        <div class="stat-box"><span class="stat-num" id="dw-week-h">0h</span><span class="stat-label">hrs this week</span></div>
+        <div class="stat-box"><span class="stat-num" id="dw-month-h">0h</span><span class="stat-label">hrs this month</span></div>
+      </div>
+      <p class="motivate" id="dw-motivate"></p>
+    </div>
+
+    <div class="card">
+      <h2>This week</h2>
+      <div id="dw-week-chart"></div>
+    </div>
+
+    <div class="card">
+      <h2>Recent sessions</h2>
+      <ul id="dw-log" class="history-list"></ul>
+      <p class="empty" id="dw-empty">No deep work sessions recorded yet.</p>
+    </div>
+  </section>
+
+</main>
+
+<nav id="tabbar">
+  <button class="tabbtn active" data-tab="tab-learn"><span class="tab-icon">🧠</span>Learn</button>
+  <button class="tabbtn" data-tab="tab-lift"><span class="tab-icon">🏋️</span>Lift</button>
+  <button class="tabbtn" data-tab="tab-focus"><span class="tab-icon">⏱️</span>Focus</button>
+</nav>
+
+<script src="app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+  }
+</script>
+</body>
+</html>
