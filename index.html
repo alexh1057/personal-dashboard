@@ -123,6 +123,44 @@
       </div>
       <p class="hint" id="sleep-msg" style="margin-top:10px">How well did you sleep? 1 = wrecked, 5 = fully rested.</p>
       <div class="sleep-strip" id="sleep-strip"></div>
+
+      <button class="btn subtle full-width" id="sleep-import" style="margin-top:12px">⌚ Import from Shortcut</button>
+      <div id="import-fallback" hidden>
+        <textarea id="import-text" rows="3" placeholder="Paste here — e.g. 7.5, or 2026-08-07=7.5; 2026-08-08=6.75"></textarea>
+        <button class="btn primary full-width" id="import-go">Import</button>
+      </div>
+      <p class="hint" id="import-msg"></p>
+
+      <details class="recipe">
+        <summary>How to set up the Shortcut</summary>
+        <ol>
+          <li><strong>Find Health Samples</strong> — Type: <em>Sleep</em>, sorted by End Date, newest first. Set the date range to the last 24 hours.</li>
+          <li><strong>Filter to asleep stages only</strong> (Core, Deep, REM). Skip “In Bed” and “Awake” or the total will be inflated.</li>
+          <li><strong>Calculate</strong> the total duration and divide to get hours.</li>
+          <li><strong>Copy to Clipboard</strong> — just the number, e.g. <code>7.5</code>.</li>
+          <li>Open this app and tap <strong>Import from Shortcut</strong>.</li>
+        </ol>
+        <p>To backfill several nights at once, copy one per line as
+          <code>YYYY-MM-DD=hours</code>. Health only reads while the phone is
+          unlocked, so run the automation after you unlock rather than overnight.</p>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="card-head-row">
+        <h2>Screen time</h2>
+        <span class="sleep-avg" id="st-trend"></span>
+      </div>
+      <p class="hint" style="margin-top:0;margin-bottom:10px">
+        iOS won't let any app read this — Apple blocks it for every third party, not
+        just web apps. Check Settings → Screen Time and type the daily average in.
+      </p>
+      <div class="st-row">
+        <input type="number" id="st-input" inputmode="decimal" min="0" max="24" step="0.1" placeholder="e.g. 3.2">
+        <span class="st-unit">h / day</span>
+        <button class="btn primary" id="st-save">Save</button>
+      </div>
+      <ul class="st-log" id="st-log"></ul>
     </div>
 
     <div class="card alert-card" id="miss-twice-card" hidden>

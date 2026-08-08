@@ -491,6 +491,7 @@ function renderHabits() {
   }
 
   renderSleep();
+  renderScreenTime();
   renderRewards();
 }
 
@@ -545,9 +546,12 @@ function renderSleep() {
   $("sleep-hours").textContent = hours.toFixed(1).replace(/\.0$/, "");
   $("sleep-quality").querySelectorAll(".qual").forEach(b =>
     b.classList.toggle("sel", !!s && +b.dataset.q === s.quality));
-  $("sleep-msg").textContent = s
-    ? `Logged ${s.hours}h · quality ${s.quality}/5. Tap again to change it.`
-    : "How well did you sleep? 1 = wrecked, 5 = fully rested.";
+  // an imported night has hours but no quality until you rate it
+  $("sleep-msg").textContent = !s
+    ? "How well did you sleep? 1 = wrecked, 5 = fully rested."
+    : s.quality
+      ? `Logged ${s.hours}h · quality ${s.quality}/5. Tap again to change it.`
+      : `Imported ${s.hours}h — tap a number to rate how it felt.`;
 
   const last7 = [];
   for (let i = 0; i < 7; i++) {
@@ -593,6 +597,134 @@ $("sleep-quality").addEventListener("click", (e) => {
   saveSleep(h, +btn.dataset.q);
   buzz(15);
   toast(`Sleep logged · ${h}h`);
+});
+
+/* ---------------- sleep import from Shortcuts ----------------
+   iOS Shortcuts can read Health sleep samples; it cannot write into this app's
+   storage. So the handoff is a payload the Shortcut puts on the clipboard (or
+   in a ?sleep= query param) and we parse here. The parser is deliberately
+   forgiving because the payload is hand-built in Shortcuts:
+     "7.5"                          -> last night
+     "sleep=7.5"                    -> last night
+     "2026-08-07=7.5; 2026-08-08=6.75"  -> backfill, one night per pair
+   Note a Shortcut opening the URL may land in Safari rather than the installed
+   web app, which on iOS is a separate storage container — hence clipboard first. */
+function parseSleepPayload(text) {
+  const out = [];
+  if (!text) return out;
+  const cleaned = String(text).trim().replace(/^sleep\s*=\s*/i, "");
+  // dated pairs first
+  const dated = [...cleaned.matchAll(/(\d{4}-\d{2}-\d{2})\s*[=:]\s*(\d+(?:\.\d+)?)/g)];
+  if (dated.length) {
+    for (const m of dated) {
+      const h = parseFloat(m[2]);
+      if (h > 0 && h <= 24) out.push({ date: m[1], hours: h });
+    }
+    return out;
+  }
+  // otherwise a bare number applies to today (capture any sign so it fails the range check)
+  const bare = cleaned.match(/(-?\d+(?:\.\d+)?)/);
+  if (bare) {
+    const h = parseFloat(bare[1]);
+    if (h > 0 && h <= 24) out.push({ date: todayISO(), hours: h });
+  }
+  return out;
+}
+
+function applySleepImport(text, source) {
+  const rows = parseSleepPayload(text);
+  const msg = $("import-msg");
+  if (!rows.length) {
+    msg.textContent = "Couldn't read that. Expected a number like 7.5, or lines of YYYY-MM-DD=hours.";
+    return 0;
+  }
+  for (const r of rows) {
+    const existing = sleep[r.date];
+    // keep any quality rating already given for that night
+    sleep[r.date] = { hours: r.hours, quality: existing ? existing.quality : null };
+  }
+  save("dash.sleep", sleep);
+  renderSleep();
+  msg.textContent = `Imported ${rows.length} night${rows.length === 1 ? "" : "s"}${source ? ` from ${source}` : ""}.`;
+  toast(`⌚ ${rows.length} night${rows.length === 1 ? "" : "s"} imported`, true);
+  return rows.length;
+}
+
+$("sleep-import").addEventListener("click", async () => {
+  const msg = $("import-msg");
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && parseSleepPayload(text).length) {
+      applySleepImport(text, "clipboard");
+      $("import-fallback").hidden = true;
+      return;
+    }
+    msg.textContent = "Clipboard didn't contain sleep data — paste it below instead.";
+  } catch {
+    msg.textContent = "Couldn't read the clipboard — paste below instead.";
+  }
+  $("import-fallback").hidden = false;
+  $("import-text").focus();
+});
+
+$("import-go").addEventListener("click", () => {
+  if (applySleepImport($("import-text").value, "paste")) {
+    $("import-text").value = "";
+    $("import-fallback").hidden = true;
+  }
+});
+
+/* ?sleep=<payload> lets a Shortcut push data by opening a URL */
+(function importFromUrl() {
+  const p = new URLSearchParams(location.search).get("sleep");
+  if (!p) return;
+  // strip the param so a refresh doesn't re-import
+  history.replaceState(null, "", location.pathname + location.hash);
+  window.addEventListener("load", () => applySleepImport(p, "link"));
+})();
+
+/* ---------------- screen time ----------------
+   Manual by necessity: iOS exposes no read access to Screen Time usage to any
+   third party — no Shortcuts action, and the native Screen Time API hands back
+   opaque tokens under an entitlement. One number a week is the honest option. */
+let screenTime = load("dash.screentime", {}); // { weekKeyISO: hoursPerDay }
+
+function renderScreenTime() {
+  const wk = weekKey();
+  const cur = screenTime[wk];
+  $("st-input").value = cur !== undefined ? cur : "";
+
+  const weeks = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(startOfWeek().getTime() - i * 7 * DAY);
+    const k = weekKey(d);
+    if (screenTime[k] !== undefined) weeks.push({ k, v: screenTime[k] });
+  }
+  const prior = weeks.slice(1);
+  if (cur !== undefined && prior.length) {
+    const avg = prior.reduce((a, w) => a + w.v, 0) / prior.length;
+    const delta = cur - avg;
+    const dir = delta > 0.05 ? "up" : delta < -0.05 ? "down" : "";
+    $("st-trend").innerHTML = dir
+      ? `<span class="st-delta ${dir}">${delta > 0 ? "+" : ""}${delta.toFixed(1)}h vs recent avg</span>`
+      : "level with recent weeks";
+  } else {
+    $("st-trend").textContent = cur !== undefined ? "first week logged" : "nothing logged yet";
+  }
+
+  $("st-log").innerHTML = weeks.map((w, i) =>
+    `<li><span>${i === 0 ? "This week" : `Week of ${fmtDate(w.k)}`}</span><span class="st-val">${w.v.toFixed(1)}h/day</span></li>`
+  ).join("");
+}
+
+$("st-save").addEventListener("click", () => {
+  const v = parseFloat($("st-input").value);
+  if (!(v >= 0 && v <= 24)) { $("st-input").focus(); return; }
+  screenTime[weekKey()] = v;
+  save("dash.screentime", screenTime);
+  renderScreenTime();
+  buzz(15);
+  toast(`Screen time logged · ${v.toFixed(1)}h/day`);
 });
 
 /* ---------------- vinyl fund ----------------

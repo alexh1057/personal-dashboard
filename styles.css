@@ -490,6 +490,42 @@ blockquote {
   background: linear-gradient(180deg, var(--tab-accent), var(--tab-accent-2));
 }
 
+.btn.subtle {
+  background: var(--card-2); border-color: var(--border-strong);
+  color: var(--muted); font-size: .82rem; padding: 10px;
+}
+
+.recipe { margin-top: 12px; }
+.recipe summary {
+  font-size: .76rem; color: var(--muted); font-weight: 700; cursor: pointer;
+  padding: 7px 0; list-style: none;
+}
+.recipe summary::-webkit-details-marker { display: none; }
+.recipe summary::before { content: "▸ "; }
+.recipe[open] summary::before { content: "▾ "; }
+.recipe ol { margin: 6px 0 0 18px; }
+.recipe li { font-size: .76rem; color: var(--muted); line-height: 1.55; margin-bottom: 6px; }
+.recipe p { font-size: .74rem; color: var(--dim); line-height: 1.55; margin-top: 8px; }
+.recipe code {
+  background: var(--card-3); border-radius: 4px; padding: 1px 5px;
+  font-size: .72rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* screen time */
+.st-row { display: flex; align-items: center; gap: 9px; }
+.st-row input { flex: 1; text-align: center; }
+.st-unit { font-size: .74rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.st-log { list-style: none; margin-top: 12px; }
+.st-log li {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: .76rem; color: var(--muted); padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.st-log li:last-child { border-bottom: none; }
+.st-log .st-val { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.st-delta.up { color: var(--red); }
+.st-delta.down { color: var(--green); }
+
 /* reward */
 .reward-card { border-color: color-mix(in srgb, var(--amber) 25%, var(--border)); }
 .cond {
