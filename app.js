@@ -99,12 +99,39 @@ function buzz(pattern) {
 }
 
 /* ================================================================
-   SECTION 1 — LEARNINGS & MEMORY (in-memory only, resets on close)
+   SECTION 1 — LEARNINGS & MEMORY (persisted in localStorage)
+
+   Two evidence-led choices here:
+   - Review is RETRIEVAL, not re-reading. Across 159 studies retrieval
+     practice beats restudy at g ~= 0.50, with 81% of comparisons favouring
+     it, and the advantage grows with the retention interval. So a review
+     shows only the cue (category + date), you try to recall, and the text
+     is revealed afterwards. Re-reading is the control condition that loses.
+   - Intervals expand (SM-2 lite). The interval should be long enough that
+     retrieval is effortful but short enough that it still succeeds, so each
+     item carries its own ease factor and due date rather than everything
+     being reviewed on the same cadence.
    ================================================================ */
-const learnings = [];       // { id, text, category, ts }
-let reviewPoints = 0;
-let pendingReview = null;   // { type, points }
-const reviewsDone = {};     // type -> true once completed this session
+let learnings = load("dash.learnings", []);
+// { id, text, category, ts, ease, interval, due:'YYYY-MM-DD', reps, lapses }
+let reviewPoints = load("dash.reviewpoints", 0);
+let pendingReview = null;   // { type, points, queue:[], idx, revealed }
+let reviewsDone = load("dash.reviewsdone", {}); // type -> ISO date last completed
+
+/* older entries predate scheduling — give them a schedule on load */
+let _migrated = false;
+for (const l of learnings) {
+  if (l.ease === undefined) {
+    l.ease = 2.5; l.interval = 0; l.reps = 0; l.lapses = 0; l.due = todayISO();
+    _migrated = true;
+  }
+}
+if (_migrated) save("dash.learnings", learnings);
+
+function dueLearnings() {
+  const t = todayISO();
+  return learnings.filter(l => (l.due || t) <= t);
+}
 
 function renderLearnStats() {
   $("learn-count").textContent = learnings.length;
@@ -117,8 +144,11 @@ function renderLearningList() {
   const sorted = [...learnings].sort((a, b) => b.ts - a.ts);
   for (const l of sorted) {
     const li = document.createElement("li");
+    const age = Math.floor((Date.now() - l.ts) / DAY);
+    const when = age === 0 ? fmtTime(l.ts) : age === 1 ? "yesterday" : `${age}d ago`;
     li.innerHTML = `<span>${esc(l.text)}</span>
-      <span class="learning-meta">${fmtTime(l.ts)}${l.category ? ` <span class="cat-tag">${esc(l.category)}</span>` : ""}</span>`;
+      <span class="learning-meta">${when}${l.category ? ` <span class="cat-tag">${esc(l.category)}</span>` : ""}${
+        l.reps ? ` <span class="rep-tag">${l.reps}× recalled</span>` : ""}</span>`;
     list.appendChild(li);
   }
   $("learn-empty").hidden = learnings.length > 0;
@@ -154,14 +184,17 @@ $("add-learning").addEventListener("click", () => {
     text,
     category: $("learning-category").value.trim(),
     ts: Date.now(),
+    ease: 2.5, interval: 0, reps: 0, lapses: 0,
+    due: isoOffset(1), // first retrieval attempt tomorrow, not the same day
   });
+  save("dash.learnings", learnings);
   $("learning-input").value = "";
   $("learning-category").value = "";
   renderLearnStats();
   renderLearningList();
   popEl($("learn-count"));
   buzz(15);
-  toast(`Captured · ${learnings.length} this session`);
+  toast(`Captured · ${learnings.length} saved`);
 });
 
 /* view toggle: list vs memory palace */
@@ -174,76 +207,146 @@ $("learn-view-toggle").addEventListener("click", (e) => {
   $("memory-palace").hidden = !palaceMode;
 });
 
-/* review reward system */
+/* review reward system — each tier now runs as a retrieval session */
 const REVIEW_CONFIG = {
-  daily:   { days: 7,  count: 1, points: 1, label: "Daily review — 1 learning from the past 7 days" },
-  weekly:  { days: 31, count: 3, points: 3, label: "Weekly review — 3 learnings from the past month" },
-  monthly: { days: 92, count: 5, points: 5, label: "Monthly review — 5 learnings from the past quarter" },
+  daily:   { days: 7,  count: 1, points: 1, label: "Daily review", scope: "due today, or the past week" },
+  weekly:  { days: 31, count: 3, points: 3, label: "Weekly review", scope: "3 from the past month" },
+  monthly: { days: 92, count: 5, points: 5, label: "Monthly review", scope: "5 from the past quarter" },
 };
 
 function startReview(type) {
   const cfg = REVIEW_CONFIG[type];
   const msg = $("review-msg");
-  if (reviewsDone[type]) {
-    msg.textContent = "Already completed this session — capture more learnings and come back tomorrow!";
+  if (reviewsDone[type] === todayISO()) {
+    msg.textContent = "Already done today — come back tomorrow.";
     return;
   }
-  const cutoff = Date.now() - cfg.days * DAY;
-  const eligible = learnings.filter(l => l.ts >= cutoff);
+  // the daily review prefers whatever the schedule says is actually due
+  let eligible = type === "daily" ? dueLearnings() : [];
   if (eligible.length === 0) {
-    msg.textContent = "No learnings in that window yet — capture something first.";
+    eligible = learnings.filter(l => l.ts >= Date.now() - cfg.days * DAY);
+  }
+  if (eligible.length === 0) {
+    msg.textContent = "Nothing to review in that window yet — capture something first.";
     return;
   }
   msg.textContent = "";
-  const picked = pickRandom(eligible, cfg.count);
-  pendingReview = { type, points: cfg.points };
-  $("review-area-title").textContent = cfg.label;
-  $("review-items").innerHTML = picked.map(l => `
-    <li>${esc(l.text)}
-      <span class="meta">${fmtTime(l.ts)}${l.category ? ` · ${esc(l.category)}` : ""}</span>
-    </li>`).join("");
-  $("review-complete").textContent = `Review complete ✓ (+${cfg.points} pt${cfg.points > 1 ? "s" : ""})`;
+  pendingReview = {
+    type, points: cfg.points,
+    queue: pickRandom(eligible, cfg.count),
+    idx: 0, revealed: false, recalled: 0,
+  };
   $("review-area").hidden = false;
+  renderReviewStep();
+}
+
+function renderReviewStep() {
+  const p = pendingReview;
+  if (!p) return;
+  const l = p.queue[p.idx];
+  const cfg = REVIEW_CONFIG[p.type];
+  const ago = Math.max(0, Math.floor((Date.now() - l.ts) / DAY));
+  const when = ago === 0 ? "earlier today" : ago === 1 ? "yesterday" : `${ago} days ago`;
+
+  $("review-area-title").textContent = `${cfg.label} — ${p.idx + 1} of ${p.queue.length}`;
+  $("review-items").innerHTML = `
+    <li class="recall-card">
+      <div class="recall-cue">${l.category ? `<span class="cat-tag">${esc(l.category)}</span>` : ""}
+        <span class="recall-when">logged ${when}</span></div>
+      <div class="recall-prompt">${p.revealed ? esc(l.text) : "What did you learn? Try to recall it before revealing."}</div>
+    </li>`;
+  $("review-items").querySelector(".recall-prompt").classList.toggle("revealed", p.revealed);
+
+  $("review-reveal").hidden = p.revealed;
+  $("review-grade").hidden = !p.revealed;
+  $("review-complete").hidden = true;
+}
+
+/* SM-2 lite: interval expands on success, collapses on a miss */
+function scheduleLearning(l, grade) { // 0 forgot, 1 got it, 2 easy
+  if (grade === 0) {
+    l.reps = 0;
+    l.interval = 1;
+    l.lapses = (l.lapses || 0) + 1;
+    l.ease = Math.max(1.3, l.ease - 0.2);
+  } else {
+    l.reps = (l.reps || 0) + 1;
+    if (l.reps === 1) l.interval = 1;
+    else if (l.reps === 2) l.interval = 3;
+    else l.interval = Math.round(l.interval * l.ease);
+    if (grade === 2) {
+      l.ease = Math.min(3.2, l.ease + 0.15);
+      l.interval = Math.round(l.interval * 1.3);
+    }
+  }
+  l.interval = Math.max(1, Math.min(365, l.interval));
+  l.due = isoOffset(l.interval);
 }
 
 $("review-daily").addEventListener("click", () => startReview("daily"));
 $("review-weekly").addEventListener("click", () => startReview("weekly"));
 $("review-monthly").addEventListener("click", () => startReview("monthly"));
 
-$("review-complete").addEventListener("click", () => {
+$("review-reveal").addEventListener("click", () => {
   if (!pendingReview) return;
-  reviewPoints += pendingReview.points;
-  reviewsDone[pendingReview.type] = true;
-  $(`review-${pendingReview.type}`).classList.add("done");
-  $("review-msg").textContent = `+${pendingReview.points} point${pendingReview.points > 1 ? "s" : ""}! Total: ${reviewPoints} review point${reviewPoints === 1 ? "" : "s"} this session.`;
-  const gained = pendingReview.points;
+  pendingReview.revealed = true;
+  renderReviewStep();
+});
+
+$("review-grade").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-grade]");
+  if (!btn || !pendingReview) return;
+  const p = pendingReview;
+  const grade = +btn.dataset.grade;
+  scheduleLearning(p.queue[p.idx], grade);
+  if (grade > 0) p.recalled++;
+  save("dash.learnings", learnings);
+
+  if (p.idx < p.queue.length - 1) {
+    p.idx++;
+    p.revealed = false;
+    renderReviewStep();
+    return;
+  }
+  // session finished — award the points
+  reviewPoints += p.points;
+  reviewsDone[p.type] = todayISO();
+  save("dash.reviewpoints", reviewPoints);
+  save("dash.reviewsdone", reviewsDone);
+  $(`review-${p.type}`).classList.add("done");
+  const nextDue = p.queue.map(l => l.interval).sort((a, b) => a - b)[0];
+  $("review-msg").textContent =
+    `+${p.points} point${p.points > 1 ? "s" : ""} · recalled ${p.recalled}/${p.queue.length}. ` +
+    `Next one comes back in ${nextDue} day${nextDue === 1 ? "" : "s"}.`;
   pendingReview = null;
   $("review-area").hidden = true;
   renderLearnStats();
+  renderLearningList();
   popEl($("review-points"));
   buzz([20, 40, 20]);
-  toast(`+${gained} point${gained > 1 ? "s" : ""} · ${reviewPoints} total`, true);
+  toast(`+${p.points} point${p.points > 1 ? "s" : ""} · ${reviewPoints} total`, true);
 });
 
-/* spaced repetition prompt: suggest reviewing something ~3 weeks old */
+/* what the schedule says is due right now */
 function renderSpacedRep() {
   const card = $("spaced-rep-card");
   if (learnings.length === 0) { card.hidden = true; return; }
   card.hidden = false;
-  const cutoff = Date.now() - 21 * DAY;
-  const old = learnings.filter(l => l.ts <= cutoff);
-  if (old.length) {
-    const pick = old[Math.floor(Math.random() * old.length)];
-    $("spaced-rep-msg").textContent = "Review something from 3 weeks ago:";
-    $("spaced-rep-item").textContent = pick.text + (pick.category ? ` — ${pick.category}` : "");
-    $("spaced-rep-item").hidden = false;
+  const due = dueLearnings();
+  const next = learnings
+    .filter(l => l.due > todayISO())
+    .sort((a, b) => a.due.localeCompare(b.due))[0];
+
+  if (due.length) {
+    $("spaced-rep-msg").innerHTML =
+      `<strong>${due.length}</strong> ${due.length === 1 ? "learning is" : "learnings are"} due for recall. ` +
+      `Run the daily review — trying to remember before you look is what makes it stick.`;
+    $("spaced-rep-item").hidden = true;
   } else {
-    const oldest = learnings.reduce((a, b) => (a.ts < b.ts ? a : b));
-    const ageMin = Math.max(1, Math.round((Date.now() - oldest.ts) / 60000));
-    $("spaced-rep-msg").textContent =
-      `Nothing 3+ weeks old yet (oldest entry is ${ageMin} min old). Re-read your oldest learning anyway — retrieval is what makes it stick.`;
-    $("spaced-rep-item").textContent = oldest.text;
-    $("spaced-rep-item").hidden = false;
+    $("spaced-rep-msg").textContent = next
+      ? `Nothing due today. Next one comes back on ${fmtDate(next.due)}.`
+      : "Nothing due today.";
+    $("spaced-rep-item").hidden = true;
   }
 }
 
@@ -387,6 +490,7 @@ function renderHabits() {
       `missing two in a row is what breaks the pattern. Get ${risky.length > 1 ? "them" : "it"} done today.`;
   }
 
+  renderSleep();
   renderRewards();
 }
 
@@ -422,6 +526,73 @@ $("habit-list").addEventListener("click", (e) => {
       toast("Habit deleted");
     }
   }
+});
+
+/* ---------------- sleep ----------------
+   One number and one rating, logged against the morning you wake up.
+   Deliberately minimal: acute sleep loss measurably cuts strength (~6% on
+   handgrip) and degrades working memory and inhibitory control, so it's worth
+   capturing — but no causal claims are drawn from n=1 data here, just the raw
+   log and a 7-night average for context. */
+let sleep = load("dash.sleep", {}); // { 'YYYY-MM-DD': { hours, quality } }
+let sleepDraft = 7.5;
+
+function todaySleep() { return sleep[todayISO()]; }
+
+function renderSleep() {
+  const s = todaySleep();
+  const hours = s ? s.hours : sleepDraft;
+  $("sleep-hours").textContent = hours.toFixed(1).replace(/\.0$/, "");
+  $("sleep-quality").querySelectorAll(".qual").forEach(b =>
+    b.classList.toggle("sel", !!s && +b.dataset.q === s.quality));
+  $("sleep-msg").textContent = s
+    ? `Logged ${s.hours}h · quality ${s.quality}/5. Tap again to change it.`
+    : "How well did you sleep? 1 = wrecked, 5 = fully rested.";
+
+  const last7 = [];
+  for (let i = 0; i < 7; i++) {
+    const rec = sleep[isoOffset(-i)];
+    if (rec) last7.push(rec.hours);
+  }
+  $("sleep-avg").textContent = last7.length
+    ? `${(last7.reduce((a, b) => a + b, 0) / last7.length).toFixed(1)}h avg · ${last7.length} night${last7.length === 1 ? "" : "s"}`
+    : "no nights logged yet";
+
+  // 14-night strip, bar height scaled across a 4h-9h band
+  let strip = "";
+  for (let i = 13; i >= 0; i--) {
+    const iso = isoOffset(-i);
+    const rec = sleep[iso];
+    const pct = rec ? Math.max(8, Math.min(100, ((rec.hours - 4) / 5) * 100)) : 0;
+    strip += `<span class="sleep-night" title="${iso}"><i style="height:${pct}%"></i></span>`;
+  }
+  $("sleep-strip").innerHTML = strip;
+}
+
+function saveSleep(hours, quality) {
+  sleep[todayISO()] = { hours, quality };
+  save("dash.sleep", sleep);
+  renderSleep();
+}
+
+$("sleep-minus").addEventListener("click", () => {
+  const s = todaySleep();
+  const next = Math.max(0, (s ? s.hours : sleepDraft) - 0.5);
+  if (s) saveSleep(next, s.quality); else { sleepDraft = next; renderSleep(); }
+});
+$("sleep-plus").addEventListener("click", () => {
+  const s = todaySleep();
+  const next = Math.min(14, (s ? s.hours : sleepDraft) + 0.5);
+  if (s) saveSleep(next, s.quality); else { sleepDraft = next; renderSleep(); }
+});
+$("sleep-quality").addEventListener("click", (e) => {
+  const btn = e.target.closest(".qual");
+  if (!btn) return;
+  const s = todaySleep();
+  const h = s ? s.hours : sleepDraft;
+  saveSleep(h, +btn.dataset.q);
+  buzz(15);
+  toast(`Sleep logged · ${h}h`);
 });
 
 /* ---------------- vinyl fund ----------------
@@ -575,6 +746,78 @@ function estimate1RM(weight, reps, rpe) {
   return weight * (1 + effReps / 30);
 }
 
+/* ---------------- autoregulation ----------------
+   Invert the same Epley+RPE model used to estimate e1RM, so a target weight
+   is whatever produces the given reps at the given RPE from your recent best.
+   Basis is the best e1RM in the last 3 weeks, not all-time: a stale PR from
+   six months ago is not a sane prescription for today. */
+function targetWeight(e1rm, reps, rpe) {
+  const rir = Math.max(0, 10 - rpe);
+  return e1rm / (1 + (reps + rir) / 30);
+}
+const round2p5 = (w) => Math.round(w / 2.5) * 2.5;
+
+function bestE1rmBetween(lift, fromDaysAgo, toDaysAgo) {
+  const from = isoOffset(-fromDaysAgo), to = isoOffset(-toDaysAgo);
+  const vals = liftLog
+    .filter(l => l.lift === lift && l.date > from && l.date <= to)
+    .map(l => estimate1RM(l.weight, l.reps, l.rpe));
+  return vals.length ? Math.max(...vals) : null;
+}
+
+/* flat or falling across two consecutive 3-week blocks, with enough data to mean it */
+function plateauState(lift) {
+  const recent = bestE1rmBetween(lift, 21, 0);
+  const prior = bestE1rmBetween(lift, 42, 21);
+  const nRecent = liftLog.filter(l => l.lift === lift && l.date > isoOffset(-21)).length;
+  if (recent === null || prior === null || nRecent < 3) return null;
+  if (recent < prior * 0.98) return "declining";
+  if (recent <= prior * 1.01) return "flat";
+  return null;
+}
+
+function renderTargets() {
+  const reps = parseInt($("lift-reps").value, 10);
+  const rpe = parseFloat($("lift-rpe").value);
+  const rows = LIFTS.map(lift => {
+    const e = bestE1rmBetween(lift, 21, 0);
+    if (e === null) return null;
+    const p = plateauState(lift);
+    return `<li>
+      <div>
+        <div class="target-name">${esc(lift)}${p ? `<span class="plateau-badge">${p === "flat" ? "plateau" : "declining"}</span>` : ""}</div>
+        <div class="target-sub">e1RM ${e.toFixed(1)} kg in the last 3 weeks${p ? " · consider a deload week" : ""}</div>
+      </div>
+      <div class="target-weight">${round2p5(targetWeight(e, reps, rpe))} kg</div>
+    </li>`;
+  }).filter(Boolean);
+  $("target-list").innerHTML = rows.join("");
+  $("target-empty").hidden = rows.length > 0;
+}
+
+function renderSuggestion() {
+  const lift = $("lift-select").value;
+  const reps = parseInt($("lift-reps").value, 10);
+  const rpe = parseFloat($("lift-rpe").value);
+  const e = bestE1rmBetween(lift, 21, 0);
+  const row = $("suggest-row");
+  if (e === null) { row.hidden = true; return; }
+  const w = round2p5(targetWeight(e, reps, rpe));
+  $("suggest-text").innerHTML =
+    `<strong>${w} kg</strong> for ${reps} @ RPE ${rpe}<br>from your ${e.toFixed(1)} kg e1RM in the last 3 weeks`;
+  row.dataset.weight = w;
+  row.hidden = false;
+}
+
+$("suggest-use").addEventListener("click", () => {
+  $("lift-weight").value = $("suggest-row").dataset.weight;
+  updateE1rmPreview();
+  buzz(10);
+});
+
+["lift-select", "lift-reps", "lift-rpe"].forEach(id =>
+  $(id).addEventListener("change", () => { renderSuggestion(); renderTargets(); }));
+
 function updateE1rmPreview() {
   const w = parseFloat($("lift-weight").value);
   const preview = $("e1rm-preview");
@@ -619,6 +862,8 @@ $("add-lift").addEventListener("click", () => {
   renderLiftChartToggle();
   renderLiftChart();
   renderLiftHistory();
+  renderSuggestion();
+  renderTargets();
 });
 
 function renderLiftChartToggle() {
@@ -1051,6 +1296,8 @@ renderLearningList();
 renderHabits();
 renderLiftChartToggle();
 renderLiftHistory();
+renderSuggestion();
+renderTargets();
 renderDeepWork();
 renderTimerDisplay(selectedMin * 60);
 activateTab(initialTab(), false); // also draws the visible chart with the right accent

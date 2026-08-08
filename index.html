@@ -43,7 +43,7 @@
     </div>
 
     <div class="card" id="spaced-rep-card" hidden>
-      <h2>Spaced repetition</h2>
+      <h2>Due for recall</h2>
       <p class="hint" id="spaced-rep-msg"></p>
       <blockquote id="spaced-rep-item" hidden></blockquote>
     </div>
@@ -53,7 +53,7 @@
       <div class="review-buttons">
         <button class="btn review" id="review-daily">
           <span class="review-title">Daily</span>
-          <span class="review-sub">1 from past 7 days · +1 pt</span>
+          <span class="review-sub">what's due today · +1 pt</span>
         </button>
         <button class="btn review" id="review-weekly">
           <span class="review-title">Weekly</span>
@@ -67,14 +67,20 @@
       <div id="review-area" hidden>
         <h3 id="review-area-title"></h3>
         <ul id="review-items" class="review-list"></ul>
-        <button class="btn primary" id="review-complete">Review complete ✓</button>
+        <button class="btn primary full-width" id="review-reveal">Show me</button>
+        <div class="grade-row" id="review-grade" hidden>
+          <button class="btn grade forgot" data-grade="0">Forgot<span>back tomorrow</span></button>
+          <button class="btn grade got" data-grade="1">Got it<span>longer gap</span></button>
+          <button class="btn grade easy" data-grade="2">Easy<span>much longer</span></button>
+        </div>
+        <button class="btn primary" id="review-complete" hidden>Review complete ✓</button>
       </div>
       <p class="hint" id="review-msg"></p>
     </div>
 
     <div class="card">
       <div class="card-head-row">
-        <h2>Session log</h2>
+        <h2>All learnings</h2>
         <div class="seg-toggle" id="learn-view-toggle">
           <button class="seg active" data-view="list">List</button>
           <button class="seg" data-view="palace">Memory palace</button>
@@ -82,7 +88,7 @@
       </div>
       <ul id="learning-list" class="learning-list"></ul>
       <div id="memory-palace" class="palace" hidden></div>
-      <p class="empty" id="learn-empty">🧠 Nothing captured yet.<br>Learnings live in memory only — they reset when you close the app.</p>
+      <p class="empty" id="learn-empty">🧠 Nothing captured yet.<br>Anything you save is scheduled for recall later.</p>
     </div>
   </section>
 
@@ -97,6 +103,27 @@
         </div>
       </div>
     </header>
+
+    <div class="card sleep-card">
+      <div class="card-head-row">
+        <h2>Last night</h2>
+        <span class="sleep-avg" id="sleep-avg"></span>
+      </div>
+      <div class="sleep-row">
+        <button class="step-btn" id="sleep-minus" aria-label="Less sleep">−</button>
+        <div class="sleep-hours"><span id="sleep-hours">7.5</span><small>hours</small></div>
+        <button class="step-btn" id="sleep-plus" aria-label="More sleep">+</button>
+      </div>
+      <div class="quality-row" id="sleep-quality" role="group" aria-label="Sleep quality">
+        <button class="qual" data-q="1">1</button>
+        <button class="qual" data-q="2">2</button>
+        <button class="qual" data-q="3">3</button>
+        <button class="qual" data-q="4">4</button>
+        <button class="qual" data-q="5">5</button>
+      </div>
+      <p class="hint" id="sleep-msg" style="margin-top:10px">How well did you sleep? 1 = wrecked, 5 = fully rested.</p>
+      <div class="sleep-strip" id="sleep-strip"></div>
+    </div>
 
     <div class="card alert-card" id="miss-twice-card" hidden>
       <h2>Don't miss twice</h2>
@@ -196,7 +223,21 @@
         </label>
       </div>
       <div class="e1rm-preview" id="e1rm-preview" hidden></div>
+      <div class="suggest-row" id="suggest-row" hidden>
+        <div class="suggest-text" id="suggest-text"></div>
+        <button class="btn" id="suggest-use">Use</button>
+      </div>
       <button class="btn primary full-width" id="add-lift">Log set</button>
+    </div>
+
+    <div class="card">
+      <h2>Next session</h2>
+      <p class="hint" style="margin-top:0;margin-bottom:12px">
+        Working weights for the reps and RPE selected above, from each lift's best
+        e1RM in the last 3 weeks. Rounded to the nearest 2.5 kg.
+      </p>
+      <ul class="target-list" id="target-list"></ul>
+      <p class="empty" id="target-empty">🏋️ Log a few sets and targets will appear here.</p>
     </div>
 
     <div class="card">
