@@ -109,6 +109,24 @@
       <p class="empty" id="habit-empty">🌱 No habits yet. Add one below — the cue is the important part.</p>
     </div>
 
+    <div class="card reward-card">
+      <div class="card-head-row">
+        <h2>Vinyl fund</h2>
+        <div class="stat-pill" id="records-pill">
+          <span class="stat-num" id="records-earned">0</span>
+          <span class="stat-label">records</span>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:0;margin-bottom:12px">
+        Earn a record when you clear <strong>both</strong> for the week — deep work at
+        100%+ of your 4-week average, and habits kept up.
+      </p>
+      <div id="reward-conditions"></div>
+      <button class="btn primary full-width" id="claim-reward" hidden>🎵 Claim your record</button>
+      <p class="hint" id="reward-msg"></p>
+      <ul class="reward-log" id="reward-log"></ul>
+    </div>
+
     <div class="card">
       <h2>New habit</h2>
       <p class="hint" style="margin-top:0;margin-bottom:12px">

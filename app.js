@@ -266,6 +266,30 @@ function renderSpacedRep() {
    ================================================================ */
 let habits = load("dash.habits", []); // { id, name, cue, created:'YYYY-MM-DD', done:{ISO:true} }
 
+/* First-run habits. All daily: Lally's automaticity curve is built on daily
+   repetition in a consistent context, and daily cues form habits faster than
+   intermittent ones — so anything plausibly daily is daily, sized small enough
+   to actually be daily (a 10-minute tidy, not a full clean).
+   Note the phone habit is phrased as an ACTION, not an avoidance. "Use my phone
+   less" has no cue-behaviour loop to automate; moving the phone to a named place
+   does. Same for bed: the action is starting the wind-down, not "being asleep". */
+const SEED_HABITS = [
+  { name: "Read 10 pages",              cue: "get into bed" },
+  { name: "Review the day — 3 lines",   cue: "close my laptop for the day" },
+  { name: "10-minute tidy",             cue: "finish washing up after dinner" },
+  { name: "10 minutes of mobility",     cue: "finish my morning coffee" },
+  { name: "Phone on the hallway shelf", cue: "sit down on the sofa after dinner" },
+  { name: "Start winding down for bed", cue: "hear my 21:15 alarm" },
+];
+
+if (!load("dash.seeded", false) && habits.length === 0) {
+  habits = SEED_HABITS.map((h, i) => ({
+    id: Date.now() + i, name: h.name, cue: h.cue, created: todayISO(), done: {},
+  }));
+  save("dash.habits", habits);
+  save("dash.seeded", true);
+}
+
 const REPS_TO_95 = 66;          // Lally median repetitions to 95% of asymptote
 const AUTO_K = REPS_TO_95 / 3;  // 1-e^-3 = 0.95, so strength(66) = 95%
 
@@ -362,6 +386,8 @@ function renderHabits() {
       `You missed <strong>${esc(names)}</strong> yesterday. Missing one day doesn't set you back — ` +
       `missing two in a row is what breaks the pattern. Get ${risky.length > 1 ? "them" : "it"} done today.`;
   }
+
+  renderRewards();
 }
 
 $("habit-list").addEventListener("click", (e) => {
@@ -396,6 +422,107 @@ $("habit-list").addEventListener("click", (e) => {
       toast("Habit deleted");
     }
   }
+});
+
+/* ---------------- vinyl fund ----------------
+   Two conditions, both required, evaluated for the current week:
+     1. deep work at 100%+ of the trailing 4-week average
+     2. habits kept up (>= HABIT_BAR of this week's opportunities so far)
+   The deep-work condition self-regulates against early claiming: this week's
+   MINUTES are compared against a full week's average, so it can't clear 100%
+   on a Monday. Habits are measured against opportunities elapsed so far, so a
+   habit created mid-week isn't punished. */
+let rewards = load("dash.rewards", []); // [{ week, claimed:'ISO', dwPct, habitPct }]
+const HABIT_BAR = 80;      // % of this week's habit opportunities
+const DW_FALLBACK_MIN = 300; // 5h — used until a 4-week baseline exists
+
+function weekKey(d = new Date()) {
+  const ws = startOfWeek(d);
+  return `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
+}
+
+/* habit completions vs opportunities elapsed so far this week */
+function habitWeekProgress() {
+  const ws = startOfWeek();
+  const daysElapsed = Math.floor((startOfDay().getTime() - ws.getTime()) / DAY) + 1;
+  let hit = 0, opps = 0;
+  for (const h of habits) {
+    for (let i = 0; i < daysElapsed; i++) {
+      const d = new Date(ws.getTime() + i * DAY);
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (iso < h.created) continue; // habit didn't exist yet
+      opps++;
+      if (h.done[iso]) hit++;
+    }
+  }
+  return { hit, opps, pct: opps ? Math.round((hit / opps) * 100) : 0 };
+}
+
+function deepWorkWeekProgress() {
+  const weekMin = sumMin(dwInRange(startOfWeek()));
+  const avgPrior = priorWeeksAvg(4);
+  if (avgPrior > 0) {
+    return { pct: Math.round((weekMin / avgPrior) * 100), weekMin, baseline: true, targetMin: Math.round(avgPrior) };
+  }
+  return { pct: Math.round((weekMin / DW_FALLBACK_MIN) * 100), weekMin, baseline: false, targetMin: DW_FALLBACK_MIN };
+}
+
+function renderRewards() {
+  const dw = deepWorkWeekProgress();
+  const hb = habitWeekProgress();
+  const dwMet = dw.pct >= 100;
+  const hbMet = habits.length > 0 && hb.pct >= HABIT_BAR;
+  const alreadyClaimed = rewards.some(r => r.week === weekKey());
+
+  $("records-earned").textContent = rewards.length;
+  $("records-pill").querySelector(".stat-label").textContent = rewards.length === 1 ? "record" : "records";
+
+  const cond = (met, label, sub, pct) => `
+    <div class="cond ${met ? "met" : ""}">
+      <span class="cond-icon">${met ? "✅" : "⬜"}</span>
+      <div class="cond-body">
+        <div class="cond-label">${label}</div>
+        <div class="cond-sub">${sub}</div>
+        <div class="cond-track"><div class="cond-fill" style="width:${Math.min(100, pct)}%"></div></div>
+      </div>
+    </div>`;
+
+  $("reward-conditions").innerHTML =
+    cond(dwMet, `Deep work · ${dw.pct}%`,
+      dw.baseline
+        ? `${dw.weekMin} min this week vs ${dw.targetMin} min 4-week average`
+        : `${dw.weekMin} of ${dw.targetMin} min (no 4-week baseline yet)`,
+      dw.pct) +
+    cond(hbMet, `Habits · ${hb.pct}%`,
+      habits.length
+        ? `${hb.hit} of ${hb.opps} chances taken this week — need ${HABIT_BAR}%`
+        : "Add a habit to start tracking",
+      hb.pct);
+
+  const ready = dwMet && hbMet && !alreadyClaimed;
+  $("claim-reward").hidden = !ready;
+  $("reward-msg").textContent = alreadyClaimed
+    ? "Record already claimed this week. Go and put it on."
+    : ready
+      ? ""
+      : "Both bars need to be full. They reset every Monday.";
+
+  $("reward-log").innerHTML = [...rewards].reverse().slice(0, 6).map(r =>
+    `<li><span>🎵 Week of ${fmtDate(r.week)}</span><span>${r.dwPct}% deep work · ${r.habitPct}% habits</span></li>`
+  ).join("");
+}
+
+$("claim-reward").addEventListener("click", () => {
+  if (rewards.some(r => r.week === weekKey())) return;
+  const dw = deepWorkWeekProgress();
+  const hb = habitWeekProgress();
+  if (dw.pct < 100 || hb.pct < HABIT_BAR) return; // guard against a stale button
+  rewards.push({ week: weekKey(), claimed: todayISO(), dwPct: dw.pct, habitPct: hb.pct });
+  save("dash.rewards", rewards);
+  renderRewards();
+  popEl($("records-earned"));
+  buzz([40, 60, 40, 60, 120]);
+  toast(`🎵 Record #${rewards.length} earned — go buy it`, true);
 });
 
 $("add-habit").addEventListener("click", () => {
@@ -798,6 +925,7 @@ function renderDeepWork() {
   renderTypeBreakdown(week);
   renderDwWeekChart();
   renderDwLog();
+  renderRewards(); // the vinyl fund depends on this week's deep-work total
 }
 
 function typeOf(s) {
