@@ -45,12 +45,53 @@ function pickRandom(arr, n) {
 }
 
 /* ---------------- tab navigation ---------------- */
+const TAB_BODY_CLASS = { "tab-learn": "on-learn", "tab-lift": "on-lift", "tab-focus": "on-focus" };
+
+function activateTab(tabId, remember = true) {
+  if (!TAB_BODY_CLASS[tabId]) tabId = "tab-learn";
+  document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === tabId));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === tabId));
+  document.body.className = TAB_BODY_CLASS[tabId];
+  // charts read --tab-accent, so redraw the newly visible one
+  if (tabId === "tab-lift") renderLiftChart();
+  if (tabId === "tab-focus") renderDwWeekChart();
+  if (remember) {
+    save("dash.tab", tabId);
+    history.replaceState(null, "", "#" + tabId.replace("tab-", ""));
+  }
+}
+
 document.querySelectorAll(".tabbtn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b === btn));
-    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === btn.dataset.tab));
-  });
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
 });
+
+/* reopen on the tab you were last using (or one named in the URL hash) */
+function initialTab() {
+  const fromHash = "tab-" + location.hash.replace("#", "");
+  if (TAB_BODY_CLASS[fromHash]) return fromHash;
+  const saved = load("dash.tab", null);
+  return TAB_BODY_CLASS[saved] ? saved : "tab-learn";
+}
+
+/* ---------------- feedback ---------------- */
+let toastTimer = null;
+function toast(msg, good = false) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.toggle("good", good);
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
+}
+function popEl(el) {
+  if (!el) return;
+  el.classList.remove("pop");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("pop");
+}
+function buzz(pattern) {
+  if (navigator.vibrate) navigator.vibrate(pattern);
+}
 
 /* ================================================================
    SECTION 1 — LEARNINGS & MEMORY (in-memory only, resets on close)
@@ -113,6 +154,9 @@ $("add-learning").addEventListener("click", () => {
   $("learning-category").value = "";
   renderLearnStats();
   renderLearningList();
+  popEl($("learn-count"));
+  buzz(15);
+  toast(`Captured · ${learnings.length} this session`);
 });
 
 /* view toggle: list vs memory palace */
@@ -167,9 +211,13 @@ $("review-complete").addEventListener("click", () => {
   reviewsDone[pendingReview.type] = true;
   $(`review-${pendingReview.type}`).classList.add("done");
   $("review-msg").textContent = `+${pendingReview.points} point${pendingReview.points > 1 ? "s" : ""}! Total: ${reviewPoints} review point${reviewPoints === 1 ? "" : "s"} this session.`;
+  const gained = pendingReview.points;
   pendingReview = null;
   $("review-area").hidden = true;
   renderLearnStats();
+  popEl($("review-points"));
+  buzz([20, 40, 20]);
+  toast(`+${gained} point${gained > 1 ? "s" : ""} · ${reviewPoints} total`, true);
 });
 
 /* spaced repetition prompt: suggest reviewing something ~3 weeks old */
@@ -249,8 +297,17 @@ $("add-lift").addEventListener("click", () => {
     date: $("lift-date").value || todayISO(),
     note: $("lift-note").value.trim(),
   };
+  // is this an all-time e1RM PR for this lift? (check before pushing)
+  const e = estimate1RM(entry.weight, entry.reps, entry.rpe);
+  const prevBest = Math.max(0, ...liftLog
+    .filter(l => l.lift === entry.lift)
+    .map(l => estimate1RM(l.weight, l.reps, l.rpe)));
+  const isPR = e > prevBest;
+
   liftLog.push(entry);
   save("dash.lifts", liftLog);
+  buzz(isPR ? [30, 50, 30, 50, 60] : 15);
+  toast(isPR ? `🏆 PR! ${entry.lift} e1RM ${e.toFixed(1)} kg` : `Logged · e1RM ${e.toFixed(1)} kg`, isPR);
   $("lift-weight").value = "";
   $("lift-note").value = "";
   $("e1rm-preview").hidden = true;
@@ -295,26 +352,58 @@ function renderLiftChart() {
     : padL + (i / (entries.length - 1)) * (W - padL - padR);
   const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
 
+  const accent = getComputedStyle(document.body).getPropertyValue("--tab-accent").trim() || "#4f8cff";
+  const pts = entries.map((e, i) => `${x(i).toFixed(1)},${y(e.e1rm).toFixed(1)}`).join(" ");
+  const baseline = H - padB;
+
   let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
-  // horizontal gridlines + labels
+  svg += `<defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+    </linearGradient></defs>`;
+
+  // recessive gridlines + y ticks
   for (let g = 0; g <= 3; g++) {
     const v = lo + (g / 3) * (hi - lo);
     const gy = y(v);
-    svg += `<line class="chart-axis" x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}"/>`;
-    svg += `<text class="chart-label" x="${padL - 6}" y="${gy + 3}" text-anchor="end">${v.toFixed(0)}</text>`;
+    svg += `<line class="chart-grid" x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}"/>`;
+    svg += `<text class="chart-label" x="${padL - 8}" y="${(gy + 3).toFixed(1)}" text-anchor="end">${v.toFixed(0)}</text>`;
   }
-  // line
-  svg += `<polyline class="chart-line" points="${entries.map((e, i) => `${x(i).toFixed(1)},${y(e.e1rm).toFixed(1)}`).join(" ")}"/>`;
-  // dots + x labels (thin labels if many points)
+
+  // area wash under the line (~10-20% opacity, never a saturated block)
+  if (entries.length > 1) {
+    svg += `<polygon class="chart-area" points="${x(0).toFixed(1)},${baseline} ${pts} ${x(entries.length - 1).toFixed(1)},${baseline}"/>`;
+  }
+  svg += `<polyline class="chart-line" points="${pts}"/>`;
+
+  // dots carry a 2px surface ring (set in CSS via stroke)
   const labelEvery = Math.max(1, Math.ceil(entries.length / 6));
   entries.forEach((e, i) => {
-    svg += `<circle class="chart-dot" cx="${x(i).toFixed(1)}" cy="${y(e.e1rm).toFixed(1)}" r="3.5"/>`;
+    svg += `<circle class="chart-dot" cx="${x(i).toFixed(1)}" cy="${y(e.e1rm).toFixed(1)}" r="4"/>`;
     if (i % labelEvery === 0 || i === entries.length - 1) {
       svg += `<text class="chart-label" x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${fmtDate(e.date)}</text>`;
     }
   });
+  // label only the final value directly — never every point
+  const last = entries[entries.length - 1];
+  svg += `<text class="chart-value" x="${(x(entries.length - 1) + 2).toFixed(1)}" y="${(y(last.e1rm) - 10).toFixed(1)}" text-anchor="end">${last.e1rm.toFixed(0)} kg</text>`;
+
+  // generous tap targets for the tooltip
+  const hitW = (W - padL - padR) / Math.max(1, entries.length);
+  entries.forEach((e, i) => {
+    svg += `<rect class="chart-hit" data-i="${i}" x="${(x(i) - hitW / 2).toFixed(1)}" y="${padT}" width="${hitW.toFixed(1)}" height="${(H - padT - padB).toFixed(1)}"/>`;
+  });
   svg += `</svg>`;
   holder.innerHTML = svg;
+
+  const tip = $("lift-tip");
+  tip.innerHTML = `<strong>${last.e1rm.toFixed(1)} kg</strong> latest · tap a point for detail`;
+  holder.querySelectorAll(".chart-hit").forEach(hit => {
+    hit.addEventListener("click", () => {
+      const e = entries[+hit.dataset.i];
+      tip.innerHTML = `<strong>${e.e1rm.toFixed(1)} kg</strong> e1RM · ${e.weight} kg × ${e.reps} @ RPE ${e.rpe} · ${fmtDate(e.date)}${e.note ? ` · “${esc(e.note)}”` : ""}`;
+    });
+  });
 }
 
 $("history-toggle").addEventListener("click", (e) => {
@@ -394,16 +483,22 @@ $("custom-min").addEventListener("input", () => {
 });
 document.querySelector('.chip[data-min="25"]').classList.add("active");
 
-function renderTimerDisplay(totalSeconds) {
+const RING_CIRCUMFERENCE = 2 * Math.PI * 44; // r=44 in the 100x100 viewBox
+
+function renderTimerDisplay(totalSeconds, fraction) {
   const m = Math.floor(totalSeconds / 60);
   const s = Math.max(0, Math.round(totalSeconds % 60));
   $("timer-display").textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  // fraction = proportion elapsed (0 = just started, 1 = done); the ring fills as it runs
+  const f = fraction === undefined ? 0 : Math.min(1, Math.max(0, fraction));
+  $("ring-progress").setAttribute("stroke-dashoffset", (RING_CIRCUMFERENCE * (1 - f)).toFixed(2));
 }
 
 function tick() {
-  const remain = Math.max(0, (timer.endTs - Date.now()) / 1000);
-  renderTimerDisplay(remain);
-  if (remain <= 0) finishSession(timer.plannedMin);
+  const totalMs = timer.plannedMin * 60000;
+  const remainMs = Math.max(0, timer.endTs - Date.now());
+  renderTimerDisplay(remainMs / 1000, 1 - remainMs / totalMs);
+  if (remainMs <= 0) finishSession(timer.plannedMin);
 }
 
 $("timer-start").addEventListener("click", () => {
@@ -428,6 +523,7 @@ $("timer-stop").addEventListener("click", () => {
   } else {
     $("timer-hint").textContent = "Stopped — under a minute, nothing logged.";
   }
+  if (elapsedMin >= 1) toast(`Stopped early · ${Math.round(elapsedMin)} min logged`);
   renderTimerDisplay(selectedMin * 60);
 });
 
@@ -436,8 +532,9 @@ function finishSession(minutes) {
   recordSession(minutes);
   $("timer-display").classList.add("finished");
   $("timer-hint").textContent = `Session complete — ${minutes} min logged. Nice work.`;
-  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-  renderTimerDisplay(0);
+  buzz([200, 100, 200]);
+  toast(`✅ ${minutes} min ${DW_TYPE_LABEL[selectedType]} complete`, true);
+  renderTimerDisplay(0, 1);
 }
 
 function stopTimerUI() {
@@ -553,34 +650,78 @@ function renderDwWeekChart() {
     return byType;
   });
   const totals = dayBuckets.map(b => Object.values(b).reduce((a, v) => a + v, 0));
-  const W = 520, H = 170, padL = 34, padR = 8, padT = 12, padB = 26;
+  const W = 520, H = 180, padL = 34, padR = 8, padT = 16, padB = 28;
   const maxV = Math.max(60, ...totals);
-  const bw = (W - padL - padR) / 7;
+  const slot = (W - padL - padR) / 7;
+  const bwidth = Math.min(38, slot * 0.6); // cap thickness — never fill the slot
+  const GAP = 3;    // 2px surface gap between stacked segments (viewBox units)
+  const R = 6;      // 4px rounded data-end at the top of the stack
+  const plotH = H - padT - padB;
   const todayIdx = Math.floor((startOfDay().getTime() - ws.getTime()) / DAY);
   const stackOrder = ["mit", "secondary", "admin", "other"];
 
+  // top segment gets rounded top corners, square at the baseline
+  const roundedTop = (x, y, w, h, r) => {
+    const rr = Math.min(r, h, w / 2);
+    return `M${x},${(y + h).toFixed(1)} L${x},${(y + rr).toFixed(1)} Q${x},${y.toFixed(1)} ${(x + rr).toFixed(1)},${y.toFixed(1)} ` +
+           `L${(x + w - rr).toFixed(1)},${y.toFixed(1)} Q${(x + w).toFixed(1)},${y.toFixed(1)} ${(x + w).toFixed(1)},${(y + rr).toFixed(1)} ` +
+           `L${(x + w).toFixed(1)},${(y + h).toFixed(1)} Z`;
+  };
+
   let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  // recessive gridlines
+  for (let g = 1; g <= 2; g++) {
+    const gy = padT + (g / 2) * plotH;
+    svg += `<line class="chart-grid" x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}"/>`;
+  }
   svg += `<line class="chart-axis" x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}"/>`;
-  svg += `<text class="chart-label" x="${padL - 6}" y="${padT + 8}" text-anchor="end">${maxV}m</text>`;
+  svg += `<text class="chart-label" x="${padL - 8}" y="${padT + 4}" text-anchor="end">${maxV}m</text>`;
+
   dayBuckets.forEach((byType, i) => {
-    const bx = padL + i * bw + bw * 0.18;
-    const bwidth = bw * 0.64;
+    const cx = padL + i * slot + slot / 2;
+    const bx = cx - bwidth / 2;
+    const present = stackOrder.filter(k => byType[k] > 0);
     let yCursor = H - padB;
-    for (const key of stackOrder) {
-      const v = byType[key];
-      if (v <= 0) continue;
-      const segH = Math.max(3, (v / maxV) * (H - padT - padB));
+
+    present.forEach((key, si) => {
+      const rawH = (byType[key] / maxV) * plotH;
+      const isTop = si === present.length - 1;
+      // reserve the surface gap above every segment except the topmost
+      const segH = Math.max(4, rawH - (isTop ? 0 : GAP));
       yCursor -= segH;
-      svg += `<rect class="chart-bar ${key}" x="${bx.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${bwidth.toFixed(1)}" height="${segH.toFixed(1)}"/>`;
+      svg += isTop
+        ? `<path class="chart-bar ${key}" d="${roundedTop(bx, yCursor, bwidth, segH, R)}"/>`
+        : `<rect class="chart-bar ${key}" x="${bx.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${bwidth.toFixed(1)}" height="${segH.toFixed(1)}"/>`;
+      yCursor -= isTop ? 0 : GAP;
+    });
+
+    svg += `<text class="chart-label${i === todayIdx ? " today" : ""}" x="${cx.toFixed(1)}" y="${H - 9}" text-anchor="middle">${days[i]}</text>`;
+    if (totals[i] > 0) {
+      svg += `<text class="chart-value" x="${cx.toFixed(1)}" y="${(yCursor - 6).toFixed(1)}" text-anchor="middle">${totals[i]}</text>`;
     }
-    svg += `<text class="chart-label${i === todayIdx ? " today" : ""}" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${days[i]}</text>`;
-    if (totals[i] > 0) svg += `<text class="chart-label" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${(yCursor - 4).toFixed(1)}" text-anchor="middle">${totals[i]}</text>`;
+    svg += `<rect class="chart-hit" data-i="${i}" x="${(padL + i * slot).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${plotH.toFixed(1)}"/>`;
   });
   svg += `</svg>`;
   $("dw-week-chart").innerHTML = svg;
   $("chart-legend").innerHTML = DW_TYPES.map(t =>
     `<span class="legend-item"><span class="legend-dot ${t.key}"></span>${esc(t.label)}</span>`
   ).join("");
+
+  const tip = $("dw-tip");
+  const weekTotal = totals.reduce((a, v) => a + v, 0);
+  tip.innerHTML = weekTotal
+    ? `<strong>${fmtHours(weekTotal)}</strong> this week · tap a day for the split`
+    : "Tap a day for its breakdown";
+  $("dw-week-chart").querySelectorAll(".chart-hit").forEach(hit => {
+    hit.addEventListener("click", () => {
+      const i = +hit.dataset.i;
+      const b = dayBuckets[i];
+      if (!totals[i]) { tip.innerHTML = `<strong>${days[i]}</strong> · no sessions`; return; }
+      const parts = DW_TYPES.filter(t => b[t.key] > 0).map(t => `${t.label} ${b[t.key]}m`);
+      if (b.other > 0) parts.push(`Other ${b.other}m`);
+      tip.innerHTML = `<strong>${days[i]} · ${totals[i]}m</strong> — ${parts.join(" · ")}`;
+    });
+  });
 }
 
 function renderDwLog() {
@@ -603,6 +744,7 @@ function renderDwLog() {
 renderLearnStats();
 renderLearningList();
 renderLiftChartToggle();
-renderLiftChart();
 renderLiftHistory();
 renderDeepWork();
+renderTimerDisplay(selectedMin * 60);
+activateTab(initialTab(), false); // also draws the visible chart with the right accent
