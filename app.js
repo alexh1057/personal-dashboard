@@ -357,9 +357,24 @@ function renderLiftHistory() {
 /* ================================================================
    SECTION 3 — DEEP WORK (persisted in localStorage)
    ================================================================ */
-let dwLog = load("dash.deepwork", []); // { id, ts, minutes, focus }
+let dwLog = load("dash.deepwork", []); // { id, ts, minutes, type }
 let timer = { running: false, endTs: 0, startTs: 0, plannedMin: 25, interval: null };
 let selectedMin = 25;
+
+const DW_TYPES = [
+  { key: "mit", label: "MIT" },
+  { key: "secondary", label: "Secondary" },
+  { key: "admin", label: "Household Admin" },
+];
+const DW_TYPE_LABEL = Object.fromEntries(DW_TYPES.map(t => [t.key, t.label]));
+let selectedType = "mit";
+
+$("type-select").addEventListener("click", (e) => {
+  const chip = e.target.closest(".type-chip");
+  if (!chip) return;
+  selectedType = chip.dataset.type;
+  $("type-select").querySelectorAll(".type-chip").forEach(c => c.classList.toggle("active", c === chip));
+});
 
 $("duration-presets").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
@@ -434,9 +449,8 @@ function stopTimerUI() {
 }
 
 function recordSession(minutes) {
-  dwLog.push({ id: Date.now(), ts: Date.now(), minutes, focus: $("focus-area").value.trim() });
+  dwLog.push({ id: Date.now(), ts: Date.now(), minutes, type: selectedType });
   save("dash.deepwork", dwLog);
-  $("focus-area").value = "";
   renderDeepWork();
 }
 
@@ -483,45 +497,81 @@ function renderDeepWork() {
   else msg = `${week.length} session${week.length > 1 ? "s" : ""} this week — one more today keeps momentum going.`;
   $("dw-motivate").textContent = msg;
 
+  renderTypeBreakdown(week);
   renderDwWeekChart();
   renderDwLog();
+}
+
+function typeOf(s) {
+  return DW_TYPE_LABEL[s.type] ? s.type : "other";
+}
+
+function renderTypeBreakdown(week) {
+  $("type-breakdown").innerHTML = DW_TYPES.map(t => {
+    const sessions = week.filter(s => typeOf(s) === t.key);
+    return `<div class="type-pill ${t.key}">
+      <span class="stat-num">${sessions.length}</span>
+      <span class="stat-label">${esc(t.label)} · ${fmtHours(sumMin(sessions))}</span>
+    </div>`;
+  }).join("");
 }
 
 function renderDwWeekChart() {
   const ws = startOfWeek();
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const mins = days.map((_, i) => {
+  const dayBuckets = days.map((_, i) => {
     const d0 = ws.getTime() + i * DAY, d1 = d0 + DAY;
-    return sumMin(dwLog.filter(s => s.ts >= d0 && s.ts < d1));
+    const sessions = dwLog.filter(s => s.ts >= d0 && s.ts < d1);
+    const byType = {};
+    for (const t of [...DW_TYPES.map(t => t.key), "other"]) {
+      byType[t] = sumMin(sessions.filter(s => typeOf(s) === t));
+    }
+    return byType;
   });
+  const totals = dayBuckets.map(b => Object.values(b).reduce((a, v) => a + v, 0));
   const W = 520, H = 170, padL = 34, padR = 8, padT = 12, padB = 26;
-  const maxV = Math.max(60, ...mins);
+  const maxV = Math.max(60, ...totals);
   const bw = (W - padL - padR) / 7;
   const todayIdx = Math.floor((startOfDay().getTime() - ws.getTime()) / DAY);
+  const stackOrder = ["mit", "secondary", "admin", "other"];
 
   let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
   svg += `<line class="chart-axis" x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}"/>`;
   svg += `<text class="chart-label" x="${padL - 6}" y="${padT + 8}" text-anchor="end">${maxV}m</text>`;
-  mins.forEach((v, i) => {
-    const bh = v === 0 ? 0 : Math.max(3, (v / maxV) * (H - padT - padB));
+  dayBuckets.forEach((byType, i) => {
     const bx = padL + i * bw + bw * 0.18;
-    svg += `<rect class="chart-bar ${i === todayIdx ? "today" : ""}" x="${bx.toFixed(1)}" y="${(H - padB - bh).toFixed(1)}" width="${(bw * 0.64).toFixed(1)}" height="${bh.toFixed(1)}" rx="3"/>`;
-    svg += `<text class="chart-label" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${days[i]}</text>`;
-    if (v > 0) svg += `<text class="chart-label" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${(H - padB - bh - 4).toFixed(1)}" text-anchor="middle">${v}</text>`;
+    const bwidth = bw * 0.64;
+    let yCursor = H - padB;
+    for (const key of stackOrder) {
+      const v = byType[key];
+      if (v <= 0) continue;
+      const segH = Math.max(3, (v / maxV) * (H - padT - padB));
+      yCursor -= segH;
+      svg += `<rect class="chart-bar ${key}" x="${bx.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${bwidth.toFixed(1)}" height="${segH.toFixed(1)}"/>`;
+    }
+    svg += `<text class="chart-label${i === todayIdx ? " today" : ""}" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${days[i]}</text>`;
+    if (totals[i] > 0) svg += `<text class="chart-label" x="${(padL + i * bw + bw / 2).toFixed(1)}" y="${(yCursor - 4).toFixed(1)}" text-anchor="middle">${totals[i]}</text>`;
   });
   svg += `</svg>`;
   $("dw-week-chart").innerHTML = svg;
+  $("chart-legend").innerHTML = DW_TYPES.map(t =>
+    `<span class="legend-item"><span class="legend-dot ${t.key}"></span>${esc(t.label)}</span>`
+  ).join("");
 }
 
 function renderDwLog() {
   const rows = [...dwLog].sort((a, b) => b.ts - a.ts).slice(0, 15);
-  $("dw-log").innerHTML = rows.map(s => `
+  $("dw-log").innerHTML = rows.map(s => {
+    const key = typeOf(s);
+    const label = DW_TYPE_LABEL[s.type] || "Other";
+    return `
     <li>
       <div class="row-main">
-        <span>${s.minutes} min${s.focus ? ` — ${esc(s.focus)}` : ""}</span>
+        <span>${s.minutes} min <span class="type-tag ${key}">${esc(label)}</span></span>
         <span class="row-sub">${new Date(s.ts).toLocaleDateString([], { day: "numeric", month: "short" })} ${fmtTime(s.ts)}</span>
       </div>
-    </li>`).join("");
+    </li>`;
+  }).join("");
   $("dw-empty").hidden = rows.length > 0;
 }
 

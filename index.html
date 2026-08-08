@@ -167,7 +167,11 @@
         <button class="chip" data-min="90">90m</button>
         <input type="number" id="custom-min" inputmode="numeric" min="1" max="240" placeholder="Custom">
       </div>
-      <input type="text" id="focus-area" placeholder="Focus area (optional)">
+      <div class="type-row" id="type-select">
+        <button class="chip type-chip mit active" data-type="mit">MIT</button>
+        <button class="chip type-chip secondary" data-type="secondary">Secondary</button>
+        <button class="chip type-chip admin" data-type="admin">Household Admin</button>
+      </div>
       <div class="timer-controls">
         <button class="btn primary" id="timer-start">Start</button>
         <button class="btn danger" id="timer-stop" hidden>Stop</button>
@@ -189,8 +193,14 @@
     </div>
 
     <div class="card">
+      <h2>By type — this week</h2>
+      <div class="type-breakdown" id="type-breakdown"></div>
+    </div>
+
+    <div class="card">
       <h2>This week</h2>
       <div id="dw-week-chart"></div>
+      <div class="chart-legend" id="chart-legend"></div>
     </div>
 
     <div class="card">

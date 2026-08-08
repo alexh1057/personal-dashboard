@@ -166,7 +166,40 @@ blockquote {
   border-radius: 999px; padding: 10px 16px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
 }
 .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-#focus-area { margin-bottom: 12px; }
+.type-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
+.type-chip.mit.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.type-chip.secondary.active { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+.type-chip.admin.active { background: var(--amber); border-color: var(--amber); color: #1a1408; }
+
+.type-breakdown { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.type-pill {
+  border-radius: 10px; padding: 10px 8px; text-align: center;
+  border-left: 4px solid var(--muted); background: var(--card-2);
+}
+.type-pill.mit { border-left-color: var(--accent); }
+.type-pill.secondary { border-left-color: var(--accent-2); }
+.type-pill.admin { border-left-color: var(--amber); }
+.type-pill .stat-num { display: block; font-size: 1.15rem; }
+.type-pill .stat-label { display: block; margin-top: 2px; }
+
+.type-tag { border-radius: 999px; padding: 1px 9px; font-size: 0.65rem; font-weight: 600; color: #fff; margin-left: 6px; }
+.type-tag.mit { background: var(--accent); }
+.type-tag.secondary { background: var(--accent-2); }
+.type-tag.admin { background: var(--amber); color: #1a1408; }
+.type-tag.other { background: var(--muted); color: #1a1408; }
+
+.chart-legend { display: flex; gap: 14px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.72rem; color: var(--muted); }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.legend-dot.mit { background: var(--accent); }
+.legend-dot.secondary { background: var(--accent-2); }
+.legend-dot.admin { background: var(--amber); }
+
+.chart-bar.mit { fill: var(--accent); }
+.chart-bar.secondary { fill: var(--accent-2); }
+.chart-bar.admin { fill: var(--amber); }
+.chart-bar.other { fill: var(--muted); }
+.chart-label.today { fill: var(--accent); font-weight: 700; }
 .timer-controls { display: flex; gap: 10px; justify-content: center; }
 .timer-controls .btn { min-width: 120px; }
 
@@ -182,7 +215,6 @@ svg.chart { width: 100%; height: auto; display: block; }
 .chart-dot { fill: var(--accent); }
 .chart-label { fill: var(--muted); font-size: 10px; font-family: inherit; }
 .chart-bar { fill: var(--accent); rx: 3; }
-.chart-bar.today { fill: var(--green); }
 
 #tabbar {
   position: fixed; bottom: 0; left: 0; right: 0;
