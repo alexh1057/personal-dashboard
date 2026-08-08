@@ -473,6 +473,18 @@ function streakDays() {
   return streak;
 }
 
+/* average weekly minutes over the `numWeeks` full weeks immediately before the current week */
+function priorWeeksAvg(numWeeks = 4) {
+  const ws = startOfWeek().getTime();
+  let total = 0;
+  for (let i = 1; i <= numWeeks; i++) {
+    const d0 = ws - i * 7 * DAY;
+    const d1 = d0 + 7 * DAY;
+    total += sumMin(dwLog.filter(s => s.ts >= d0 && s.ts < d1));
+  }
+  return total / numWeeks;
+}
+
 function renderDeepWork() {
   const today = dwInRange(startOfDay());
   const week = dwInRange(startOfWeek());
@@ -481,12 +493,24 @@ function renderDeepWork() {
   $("dw-today-n").textContent = today.length;
   $("dw-week-n").textContent = week.length;
   $("dw-month-n").textContent = month.length;
+  const weekMin = sumMin(week);
   $("dw-today-h").textContent = fmtHours(sumMin(today));
-  $("dw-week-h").textContent = fmtHours(sumMin(week));
+  $("dw-week-h").textContent = fmtHours(weekMin);
   $("dw-month-h").textContent = fmtHours(sumMin(month));
 
-  // deep work score: total focused minutes this week
-  $("dw-score").textContent = sumMin(week);
+  // weekly score: this week's minutes as a percentage of the trailing 4-week average
+  const avgPrior = priorWeeksAvg(4);
+  const scorePill = $("dw-score-pill");
+  if (avgPrior <= 0) {
+    $("dw-score").textContent = weekMin > 0 ? "New" : "—";
+    scorePill.title = weekMin > 0
+      ? "No sessions in the prior 4 weeks to compare against yet."
+      : "Log a session to start tracking your weekly score.";
+  } else {
+    const pct = Math.round((weekMin / avgPrior) * 100);
+    $("dw-score").textContent = `${pct}%`;
+    scorePill.title = `This week: ${weekMin} min · 4-week avg: ${Math.round(avgPrior)} min`;
+  }
 
   // motivation
   const streak = streakDays();
