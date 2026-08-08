@@ -43,6 +43,7 @@
 }
 
 body.on-learn  { --tab-accent: #a78bfa; --tab-accent-2: #6366f1; }
+body.on-habits { --tab-accent: #34d399; --tab-accent-2: #14b8a6; }
 body.on-lift   { --tab-accent: #ff9f45; --tab-accent-2: #ff5f70; }
 body.on-focus  { --tab-accent: #4f8cff; --tab-accent-2: #22d3ee; }
 
@@ -339,6 +340,85 @@ blockquote {
 .type-tag.secondary { background: var(--cat-secondary); }
 .type-tag.admin { background: var(--cat-admin); }
 .type-tag.other { background: var(--dim); }
+
+/* ---------------- habits ---------------- */
+.alert-card {
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--amber) 10%, var(--card)), #12161e);
+}
+.alert-card h2 { color: var(--amber); }
+
+.habit-list { list-style: none; }
+.habit-item {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 0; border-bottom: 1px solid var(--border);
+}
+.habit-item:first-child { padding-top: 2px; }
+.habit-item:last-child { border-bottom: none; padding-bottom: 2px; }
+.habit-main { flex: 1; min-width: 0; }
+.habit-name { font-size: .98rem; font-weight: 700; line-height: 1.3; }
+.habit-cue {
+  font-size: .74rem; color: var(--muted); margin-top: 3px; line-height: 1.4;
+}
+.habit-cue .cue-lead { color: var(--dim); }
+
+/* 28-day strip — done is a filled block, missed a hollow one:
+   fill/shape carries the state, not hue alone */
+.habit-strip { display: flex; gap: 2px; margin-top: 9px; }
+.strip-cell { flex: 1; height: 14px; border-radius: 3px; background: var(--card-3); }
+.strip-cell.done { background: var(--tab-accent); }
+/* a missed day is a real, visible gap in the record; a day before the habit
+   existed is absent entirely — so these must not look the same */
+.strip-cell.missed { background: rgba(255,255,255,.11); }
+.strip-cell.pre { background: rgba(255,255,255,.025); }
+.strip-cell.today { outline: 1.5px solid rgba(255,255,255,.4); outline-offset: 1px; }
+.strip-cell.today.done { outline-color: var(--tab-accent); }
+
+.habit-meter { margin-top: 10px; }
+.habit-meter-track {
+  height: 6px; border-radius: 999px; background: var(--card-3); overflow: hidden;
+}
+.habit-meter-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--tab-accent), var(--tab-accent-2));
+  transition: width .5s cubic-bezier(.2,.7,.3,1);
+}
+.habit-stats {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  font-size: .69rem; color: var(--muted); margin-top: 6px; font-weight: 600;
+}
+.habit-stats .num { color: var(--text); font-weight: 800; }
+
+.habit-check {
+  flex: none; width: 46px; height: 46px; border-radius: 14px;
+  border: 2px solid var(--card-3); background: var(--card-2);
+  color: var(--dim); font-size: 1.35rem; font-weight: 800; line-height: 1;
+  cursor: pointer; touch-action: manipulation;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .14s cubic-bezier(.2,1.6,.4,1), background .18s ease, border-color .18s ease, color .18s ease;
+}
+.habit-check:active { transform: scale(.9); }
+.habit-check.done {
+  background: linear-gradient(135deg, var(--tab-accent), var(--tab-accent-2));
+  border-color: transparent; color: #06281c;
+  box-shadow: 0 4px 14px -6px var(--tab-accent);
+}
+.habit-check.at-risk { border-color: var(--amber); color: var(--amber); }
+
+.habit-del {
+  border: none; background: transparent; color: var(--dim);
+  font-size: .95rem; cursor: pointer; padding: 2px 6px; line-height: 1;
+  align-self: center;
+}
+.habit-del:active { color: var(--red); }
+
+.intention {
+  display: flex; flex-direction: column; gap: 7px; margin-bottom: 13px;
+}
+.intention-lead {
+  font-size: .7rem; color: var(--muted); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .07em;
+}
 
 /* ---------------- charts ---------------- */
 svg.chart { width: 100%; height: auto; display: block; overflow: visible; }

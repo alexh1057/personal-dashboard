@@ -45,7 +45,12 @@ function pickRandom(arr, n) {
 }
 
 /* ---------------- tab navigation ---------------- */
-const TAB_BODY_CLASS = { "tab-learn": "on-learn", "tab-lift": "on-lift", "tab-focus": "on-focus" };
+const TAB_BODY_CLASS = {
+  "tab-learn": "on-learn",
+  "tab-habits": "on-habits",
+  "tab-lift": "on-lift",
+  "tab-focus": "on-focus",
+};
 
 function activateTab(tabId, remember = true) {
   if (!TAB_BODY_CLASS[tabId]) tabId = "tab-learn";
@@ -243,7 +248,179 @@ function renderSpacedRep() {
 }
 
 /* ================================================================
-   SECTION 2 — STRENGTH TRAINING (persisted in localStorage)
+   SECTION 2 — HABITS (persisted in localStorage)
+
+   Design follows the habit-formation literature rather than the
+   usual streak-counter pattern:
+   - Lally et al. (2010) fitted asymptotic automaticity curves and found a
+     median 66 days to 95% of asymptote (range 18-254). Singh et al. (2024)
+     meta-analysis: medians 59-66 days, individual range 4-335. The "21 day
+     rule" has no empirical basis.
+   - Lally also found that missing a SINGLE day did not materially affect
+     habit formation, so a streak that resets to zero on one miss punishes
+     something the evidence says is harmless. We surface "never miss twice"
+     and trailing consistency instead, and keep the streak as a minor stat.
+   - Implementation intentions ("when X, I will Y") reliably help, so a cue
+     is required at creation. Cue TYPE (time-based vs routine-based) shows
+     no meaningful difference, so any text is accepted.
+   ================================================================ */
+let habits = load("dash.habits", []); // { id, name, cue, created:'YYYY-MM-DD', done:{ISO:true} }
+
+const REPS_TO_95 = 66;          // Lally median repetitions to 95% of asymptote
+const AUTO_K = REPS_TO_95 / 3;  // 1-e^-3 = 0.95, so strength(66) = 95%
+
+function isoOffset(days) {
+  const d = startOfDay();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/* automaticity estimate: asymptotic in the number of repetitions actually done */
+function automaticity(h) {
+  const reps = Object.keys(h.done).length;
+  return 1 - Math.exp(-reps / AUTO_K);
+}
+
+/* days the habit has existed (inclusive of today) */
+function habitAgeDays(h) {
+  return Math.max(1, Math.round((startOfDay().getTime() - new Date(h.created + "T12:00").getTime()) / DAY) + 1);
+}
+
+/* completions / opportunities over the trailing `window` days, capped at habit age */
+function consistency(h, window = 30) {
+  const days = Math.min(window, habitAgeDays(h));
+  let hit = 0;
+  for (let i = 0; i < days; i++) if (h.done[isoOffset(-i)]) hit++;
+  return { hit, days, pct: days ? Math.round((hit / days) * 100) : 0 };
+}
+
+function currentStreak(h) {
+  let n = 0;
+  // today only counts if done; otherwise the streak is measured to yesterday
+  let i = h.done[todayISO()] ? 0 : 1;
+  while (h.done[isoOffset(-i)]) { n++; i++; }
+  return n;
+}
+
+/* at risk = missed yesterday (and existed then) and not yet done today */
+function atRiskOfSecondMiss(h) {
+  const y = isoOffset(-1);
+  if (h.created > y) return false;
+  return !h.done[y] && !h.done[todayISO()];
+}
+
+function renderHabits() {
+  const list = $("habit-list");
+  const today = todayISO();
+  const doneToday = habits.filter(h => h.done[today]).length;
+  $("habit-today").textContent = `${doneToday}/${habits.length}`;
+  $("habit-empty").hidden = habits.length > 0;
+
+  list.innerHTML = habits.map(h => {
+    const pct = Math.round(automaticity(h) * 100);
+    const c = consistency(h);
+    const streak = currentStreak(h);
+    const isDone = !!h.done[today];
+    const risk = atRiskOfSecondMiss(h);
+
+    // 28-day strip, oldest -> today
+    let strip = "";
+    for (let i = 27; i >= 0; i--) {
+      const iso = isoOffset(-i);
+      const cls = iso < h.created ? "pre" : h.done[iso] ? "done" : "missed";
+      strip += `<span class="strip-cell ${cls}${i === 0 ? " today" : ""}"></span>`;
+    }
+
+    return `<li class="habit-item">
+      <button class="habit-check ${isDone ? "done" : ""} ${risk ? "at-risk" : ""}"
+              data-id="${h.id}" aria-pressed="${isDone}"
+              aria-label="Mark ${esc(h.name)} done for today">${isDone ? "✓" : ""}</button>
+      <div class="habit-main">
+        <div class="habit-name">${esc(h.name)}</div>
+        <div class="habit-cue"><span class="cue-lead">When I</span> ${esc(h.cue)}</div>
+        <div class="habit-strip">${strip}</div>
+        <div class="habit-meter">
+          <div class="habit-meter-track"><div class="habit-meter-fill" style="width:${pct}%"></div></div>
+          <div class="habit-stats">
+            <span><span class="num">${pct}%</span> automatic</span>
+            <span><span class="num">${Object.keys(h.done).length}</span>/${REPS_TO_95} reps</span>
+            <span><span class="num">${c.pct}%</span> last ${c.days}d</span>
+            ${streak > 1 ? `<span><span class="num">${streak}</span> in a row</span>` : ""}
+          </div>
+        </div>
+      </div>
+      <button class="habit-del" data-del="${h.id}" aria-label="Delete ${esc(h.name)}">✕</button>
+    </li>`;
+  }).join("");
+
+  // never-miss-twice alert
+  const risky = habits.filter(atRiskOfSecondMiss);
+  $("miss-twice-card").hidden = risky.length === 0;
+  if (risky.length) {
+    const names = risky.map(h => h.name).join(", ");
+    $("miss-twice-msg").innerHTML =
+      `You missed <strong>${esc(names)}</strong> yesterday. Missing one day doesn't set you back — ` +
+      `missing two in a row is what breaks the pattern. Get ${risky.length > 1 ? "them" : "it"} done today.`;
+  }
+}
+
+$("habit-list").addEventListener("click", (e) => {
+  const check = e.target.closest(".habit-check");
+  if (check) {
+    const h = habits.find(x => String(x.id) === check.dataset.id);
+    if (!h) return;
+    const today = todayISO();
+    const wasDone = !!h.done[today];
+    if (wasDone) delete h.done[today];
+    else h.done[today] = true;
+    save("dash.habits", habits);
+    renderHabits();
+    if (!wasDone) {
+      buzz(20);
+      const pct = Math.round(automaticity(h) * 100);
+      const reps = Object.keys(h.done).length;
+      toast(reps >= REPS_TO_95
+        ? `🌱 ${h.name} — ${reps} reps, past the 66-rep median`
+        : `${h.name} done · ${pct}% automatic`, true);
+    }
+    return;
+  }
+  const del = e.target.closest(".habit-del");
+  if (del) {
+    const h = habits.find(x => String(x.id) === del.dataset.del);
+    if (!h) return;
+    if (confirm(`Delete “${h.name}”? Its history will be lost.`)) {
+      habits = habits.filter(x => x !== h);
+      save("dash.habits", habits);
+      renderHabits();
+      toast("Habit deleted");
+    }
+  }
+});
+
+$("add-habit").addEventListener("click", () => {
+  const cue = $("habit-cue").value.trim();
+  const name = $("habit-name").value.trim();
+  const msg = $("habit-form-msg");
+  if (!name) { msg.textContent = "Give the habit a name."; $("habit-name").focus(); return; }
+  if (!cue) {
+    // the cue is the evidence-backed part — don't let it be skipped
+    msg.textContent = "Add a cue. A habit without a trigger is just a wish — the “when” is what makes it stick.";
+    $("habit-cue").focus();
+    return;
+  }
+  habits.push({ id: Date.now(), name, cue, created: todayISO(), done: {} });
+  save("dash.habits", habits);
+  $("habit-cue").value = "";
+  $("habit-name").value = "";
+  msg.textContent = "";
+  renderHabits();
+  buzz(15);
+  toast(`🌱 Tracking “${name}”`, true);
+});
+
+/* ================================================================
+   SECTION 3 — STRENGTH TRAINING (persisted in localStorage)
    ================================================================ */
 const LIFTS = ["Bench Press", "Trap Bar Deadlift", "Overhead Press", "High Bar Squat"];
 let liftLog = load("dash.lifts", []); // { id, lift, weight, reps, rpe, date, note }
@@ -444,7 +621,7 @@ function renderLiftHistory() {
 }
 
 /* ================================================================
-   SECTION 3 — DEEP WORK (persisted in localStorage)
+   SECTION 4 — DEEP WORK (persisted in localStorage)
    ================================================================ */
 let dwLog = load("dash.deepwork", []); // { id, ts, minutes, type }
 let timer = { running: false, endTs: 0, startTs: 0, plannedMin: 25, interval: null };
@@ -743,6 +920,7 @@ function renderDwLog() {
 /* ---------------- initial render ---------------- */
 renderLearnStats();
 renderLearningList();
+renderHabits();
 renderLiftChartToggle();
 renderLiftHistory();
 renderDeepWork();

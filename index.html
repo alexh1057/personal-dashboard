@@ -86,7 +86,62 @@
     </div>
   </section>
 
-  <!-- ============ SECTION 2: LIFTS ============ -->
+  <!-- ============ SECTION 2: HABITS ============ -->
+  <section id="tab-habits" class="tab">
+    <header class="section-head">
+      <h1>Habits</h1>
+      <div class="headline-stats">
+        <div class="stat-pill accent">
+          <span class="stat-num" id="habit-today">0/0</span>
+          <span class="stat-label">today</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="card alert-card" id="miss-twice-card" hidden>
+      <h2>Don't miss twice</h2>
+      <p class="hint" id="miss-twice-msg"></p>
+    </div>
+
+    <div class="card">
+      <h2>Today</h2>
+      <ul id="habit-list" class="habit-list"></ul>
+      <p class="empty" id="habit-empty">🌱 No habits yet. Add one below — the cue is the important part.</p>
+    </div>
+
+    <div class="card">
+      <h2>New habit</h2>
+      <p class="hint" style="margin-top:0;margin-bottom:12px">
+        Stating <em>when</em> and <em>where</em> you'll act — an implementation intention —
+        is one of the few things shown to reliably speed habit formation.
+      </p>
+      <div class="intention">
+        <span class="intention-lead">When I</span>
+        <input type="text" id="habit-cue" placeholder="finish my morning coffee" maxlength="60">
+        <span class="intention-lead">I will</span>
+        <input type="text" id="habit-name" placeholder="do 10 minutes of stretching" maxlength="60">
+      </div>
+      <button class="btn primary full-width" id="add-habit">Add habit</button>
+      <p class="hint" id="habit-form-msg"></p>
+    </div>
+
+    <div class="card">
+      <h2>How this works</h2>
+      <p class="hint" style="margin-top:0">
+        The bar on each habit estimates <strong>automaticity</strong> — how far along the
+        curve from effortful to automatic — using Lally's asymptotic model, reaching 95%
+        at 66 repetitions. That's the <em>median</em>: real times ranged from 18 to 254 days,
+        so treat it as a guide, not a deadline.
+      </p>
+      <p class="hint">
+        Missing a single day doesn't measurably set you back — missing two in a row is what
+        breaks the chain, which is why this tracks “never miss twice” rather than a streak
+        that resets to zero.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SECTION 3: LIFTS ============ -->
   <section id="tab-lift" class="tab">
     <header class="section-head">
       <h1>Strength</h1>
@@ -148,7 +203,7 @@
     </div>
   </section>
 
-  <!-- ============ SECTION 3: DEEP WORK ============ -->
+  <!-- ============ SECTION 4: DEEP WORK ============ -->
   <section id="tab-focus" class="tab">
     <header class="section-head">
       <h1>Deep Work</h1>
@@ -229,6 +284,7 @@
 
 <nav id="tabbar">
   <button class="tabbtn active" data-tab="tab-learn"><span class="tab-icon">🧠</span>Learn</button>
+  <button class="tabbtn" data-tab="tab-habits"><span class="tab-icon">🌱</span>Habits</button>
   <button class="tabbtn" data-tab="tab-lift"><span class="tab-icon">🏋️</span>Lift</button>
   <button class="tabbtn" data-tab="tab-focus"><span class="tab-icon">⏱️</span>Focus</button>
 </nav>
@@ -237,8 +293,16 @@
 
 <script src="app.js"></script>
 <script>
+  // The service worker is cache-first, which serves stale files during local
+  // development. Only register it on the real origin; tear it down on localhost.
+  const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    if (isLocal) {
+      navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+      if (window.caches) caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
+    } else {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
   }
 </script>
 </body>
