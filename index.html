@@ -377,6 +377,43 @@
     </div>
   </section>
 
+  <!-- ============ SECTION 5: TIPS ============ -->
+  <section id="tab-tips" class="tab">
+    <header class="section-head">
+      <h1>Tips</h1>
+    </header>
+
+    <div class="card">
+      <p class="hint" style="margin-top:0">
+        Advice for each habit you're tracking, matched to how it's actually going.
+        A habit that's holding gets maintenance advice; one that's slipping gets
+        something different.
+      </p>
+    </div>
+
+    <div id="tips-list"></div>
+    <p class="empty" id="tips-empty" hidden>💡 Add a habit and tips will appear here.</p>
+
+    <div class="card">
+      <h2>When any habit slips</h2>
+      <ul class="principle-list">
+        <li><strong>Never miss twice.</strong> One missed day has no measurable effect on
+          how the habit forms. Two in a row is what turns a slip into a stop.</li>
+        <li><strong>Shrink it before you drop it.</strong> If you're missing a habit
+          repeatedly, the behaviour is too big. One page, two minutes, one surface.
+          A small rep still counts as a rep; a skipped day doesn't.</li>
+        <li><strong>Don't change the cue.</strong> Automaticity comes from the same
+          trigger in the same context, over and over. Moving the cue restarts the clock.</li>
+        <li><strong>Early reps matter most.</strong> The automaticity curve is steepest
+          at the start, so the first few weeks buy more than the later ones. Protect
+          them, and expect it to feel effortful for longer than you'd like.</li>
+        <li><strong>Expect months, not weeks.</strong> Median time to automatic is about
+          two months, and the spread runs from under three weeks to well over a year.
+          If it still feels like effort at day 40, that's normal, not failure.</li>
+      </ul>
+    </div>
+  </section>
+
 </main>
 
 <nav id="tabbar">
@@ -384,6 +421,7 @@
   <button class="tabbtn" data-tab="tab-habits"><span class="tab-icon">🌱</span>Habits</button>
   <button class="tabbtn" data-tab="tab-lift"><span class="tab-icon">🏋️</span>Lift</button>
   <button class="tabbtn" data-tab="tab-focus"><span class="tab-icon">⏱️</span>Focus</button>
+  <button class="tabbtn" data-tab="tab-tips"><span class="tab-icon">💡</span>Tips</button>
 </nav>
 
 <div id="toast" role="status" aria-live="polite"></div>

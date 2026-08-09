@@ -1,4 +1,4 @@
-const CACHE_NAME = "dash-v8";
+const CACHE_NAME = "dash-v9";
 const APP_SHELL = [
   "./",
   "./index.html",

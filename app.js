@@ -50,6 +50,7 @@ const TAB_BODY_CLASS = {
   "tab-habits": "on-habits",
   "tab-lift": "on-lift",
   "tab-focus": "on-focus",
+  "tab-tips": "on-tips",
 };
 
 function activateTab(tabId, remember = true) {
@@ -493,6 +494,7 @@ function renderHabits() {
   renderSleep();
   renderScreenTime();
   renderRewards();
+  renderTips(); // the per-habit advice keys off the stats above
 }
 
 $("habit-list").addEventListener("click", (e) => {
@@ -598,6 +600,128 @@ $("sleep-quality").addEventListener("click", (e) => {
   buzz(15);
   toast(`Sleep logged · ${h}h`);
 });
+
+/* ================================================================
+   TIPS — per-habit advice, matched to how the habit is actually going
+
+   Matching is by keyword on the habit name rather than a stored key, so it
+   still works for habits seeded before this existed and for anything you
+   add yourself. Anything unmatched falls back to the generic set.
+   ================================================================ */
+const TIP_SETS = [
+  {
+    match: /read|book|pages/i,
+    tips: [
+      ["Leave the book physically on the pillow.", "A cue you can't miss beats one you have to remember. If the book lives in another room, the habit depends on willpower instead of the environment."],
+      ["Ten pages is the floor, not the target.", "On a wrecked night, read one page. The repetition is what builds automaticity — volume isn't. One page keeps the chain; zero breaks it."],
+      ["Abandon books you aren't enjoying.", "Most reading habits die defending a book the reader stopped liking 80 pages ago. The habit is reading, not finishing."],
+      ["It doubles as the phone substitute.", "Your hands need something at bedtime. If the book isn't there, the phone will be."],
+    ],
+  },
+  {
+    match: /review|journal|reflect/i,
+    tips: [
+      ["Hold the line at three lines.", "Journalling habits usually die from scope creep, not lack of interest. Three lines is finishable on a bad day, and finishable is the whole point."],
+      ["Use a fixed prompt so you're never staring at a blank page.", "What went well · what didn't · one thing for tomorrow. Deciding what to write is the friction, so remove that decision."],
+      ["Feed anything worth keeping into the Learn tab.", "The review is where you notice the insight; the Learn tab is what stops you losing it. It'll come back for recall later."],
+      ["Do it at the laptop, before you get up.", "The cue is closing the laptop. If you stand up first, it won't happen."],
+    ],
+  },
+  {
+    match: /tidy|clean|flat|hous/i,
+    tips: [
+      ["Set an actual 10-minute timer and stop when it goes.", "Stopping on time is what makes this repeatable. If it routinely runs to 40 minutes you'll start avoiding it."],
+      ["One room or one surface. Not the flat.", "The daily version exists to prevent the three-hour weekend blitz, not to replicate it in miniature."],
+      ["Think 'reset', not 'clean'.", "Put things back where they live. Deep cleaning is a different job with a different cadence."],
+      ["Start with the surface you see first when you walk in.", "Visible order does most of the psychological work for the least effort."],
+    ],
+  },
+  {
+    match: /mobility|stretch|yoga|flexib/i,
+    tips: [
+      ["Morning is deliberate, not arbitrary.", "Stretching habits have been found to hold better when practised in the morning than the evening — which is exactly why this one is pinned to your coffee."],
+      ["Same mat, same square metre, every time.", "Context stability is one of the strongest drivers of automaticity. Same place, same order, same first movement."],
+      ["Point it at your lifts.", "Hips and ankles for the squat, t-spine and shoulders for the overhead press. Mobility that removes a limiter gets repeated; generic stretching doesn't."],
+      ["Two minutes counts on a bad day.", "A short session keeps the cue-behaviour link alive. Skipping is the only thing that damages it."],
+    ],
+  },
+  {
+    match: /phone|screen|shelf/i,
+    tips: [
+      ["The habit is the walk to the shelf, not the not-scrolling.", "You can't make an absence automatic. You can make an action automatic, and the action removes the temptation for you."],
+      ["Distance is the mechanism. Willpower isn't.", "Every extra step between you and the phone is doing work that self-control would otherwise have to do all evening."],
+      ["Put the charger on the shelf.", "Give the phone a legitimate reason to live there. 'It's charging' is a much easier story than 'I'm resisting it'."],
+      ["If you need it, fetch it deliberately.", "The walk is the pause. Getting up on purpose is completely different from reaching for it without noticing."],
+    ],
+  },
+  {
+    match: /\bbed\b|wind[- ]?down|winding down|sleep/i,
+    tips: [
+      ["The habit is starting the wind-down. Nothing else.", "You can't will yourself asleep, so 'asleep by 21:30' isn't a trackable behaviour. Starting a routine at 21:15 is."],
+      ["Protect the wake time harder than the bedtime.", "A consistent wake time anchors your body clock more reliably than a consistent bedtime, and it makes the bedtime easier by itself."],
+      ["Drop the lights before you drop the pace.", "Light is the strongest signal your circadian system takes. Dimming is a faster win than any other part of the routine."],
+      ["A bad night doesn't mean a failed habit.", "You're tracking whether you started the routine, not how you slept. Mark it done — the sleep log is where the outcome lives."],
+    ],
+  },
+];
+
+const GENERIC_TIPS = [
+  ["Keep the cue fixed.", "Automaticity is built by the same trigger firing in the same context. If you keep moving when you do it, you're restarting the clock each time."],
+  ["Make it small enough to survive a bad day.", "The version you'd still do while tired and behind on work is the version that becomes automatic."],
+  ["Attach it to something already automatic.", "An existing routine is a far more reliable trigger than an intention, because it's already happening without you deciding."],
+  ["Never miss twice.", "One missed day doesn't measurably set the habit back. Two in a row is what turns a slip into a stop."],
+];
+
+function tipsFor(habit) {
+  const set = TIP_SETS.find(t => t.match.test(habit.name));
+  return set ? set.tips : GENERIC_TIPS;
+}
+
+/* how is this habit actually doing? drives which advice leads */
+function diagnose(h) {
+  const reps = Object.keys(h.done).length;
+  const c = consistency(h, 14);
+  const age = habitAgeDays(h);
+  const pct = Math.round(automaticity(h) * 100);
+
+  if (age <= 3 || reps === 0) {
+    return { state: "new", label: "just started",
+      advice: reps === 0
+        ? "Nothing logged yet. The first few reps buy more automaticity than any later ones, so getting today done matters more than it will in a month."
+        : `${reps} rep${reps === 1 ? "" : "s"} in. Early repetitions move the needle fastest — this is the stretch worth protecting.` };
+  }
+  if (c.pct >= 85) {
+    return { state: "solid", label: "holding",
+      advice: `${c.hit} of the last ${c.days} days, ${pct}% automatic. This one's working — don't redesign it. Keep the cue exactly where it is and let the reps accumulate.` };
+  }
+  if (c.pct >= 50) {
+    return { state: "wobbly", label: "wobbling",
+      advice: `${c.hit} of the last ${c.days} days. Not broken, but drifting. Usually the cue has become unreliable rather than the habit becoming unwanted — check whether the trigger still happens at a predictable time.` };
+  }
+  return { state: "slipping", label: "slipping",
+    advice: `Only ${c.hit} of the last ${c.days} days. That's a sign the behaviour is too big rather than that you lack discipline. Shrink it to something you'd do on your worst day, and rebuild from there.` };
+}
+
+function renderTips() {
+  const list = $("tips-list");
+  $("tips-empty").hidden = habits.length > 0;
+  list.innerHTML = habits.map(h => {
+    const d = diagnose(h);
+    return `<div class="card tip-card">
+      <div class="tip-head">
+        <div>
+          <div class="tip-name">${esc(h.name)}</div>
+          <div class="tip-cue"><span class="cue-lead">When I</span> ${esc(h.cue)}</div>
+        </div>
+        <span class="state-badge ${d.state}">${d.label}</span>
+      </div>
+      <div class="tip-diagnosis">${esc(d.advice)}</div>
+      <ul class="tip-list">
+        ${tipsFor(h).map(([lead, body]) => `<li><strong>${esc(lead)}</strong> ${esc(body)}</li>`).join("")}
+      </ul>
+    </div>`;
+  }).join("");
+}
 
 /* ---------------- sleep import from Shortcuts ----------------
    iOS Shortcuts can read Health sleep samples; it cannot write into this app's
