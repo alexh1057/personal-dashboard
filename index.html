@@ -414,6 +414,75 @@
     </div>
   </section>
 
+  <!-- ============ SECTION 6: JUMP ============ -->
+  <section id="tab-play" class="tab">
+    <header class="section-head">
+      <h1>Jump</h1>
+      <div class="headline-stats">
+        <div class="stat-pill accent">
+          <span class="stat-num" id="jump-best">0</span>
+          <span class="stat-label">best</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="card jump-card">
+      <div class="jump-stage" id="jump-stage">
+        <canvas id="jump-canvas" role="img" aria-label="Jump game: bounce up the platforms as high as you can"></canvas>
+        <button class="jump-pause" id="jump-pause" aria-label="Pause" hidden>❚❚</button>
+        <div class="jump-overlay" id="jump-overlay">
+          <div class="jump-panel">
+            <p class="jump-kicker" id="jump-kicker">Endless climber</p>
+            <p class="jump-score" id="jump-final" hidden></p>
+            <p class="hint" id="jump-sub">Land on platforms to bounce. Climb as high as you can and don't fall off the bottom.</p>
+            <div class="jump-ledger-wrap" id="jump-ledger-wrap" hidden>
+              <h2>Run ledger</h2>
+              <div class="stats-grid jump-ledger" id="jump-ledger"></div>
+            </div>
+            <button class="btn primary full-width" id="jump-go">Play</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head-row">
+        <h2>Steering</h2>
+        <div class="seg-toggle" id="jump-steer-toggle">
+          <button class="seg active" data-steer="touch">Touch</button>
+          <button class="seg" data-steer="tilt">Tilt</button>
+        </div>
+      </div>
+      <p class="hint" id="jump-steer-hint" style="margin-top:0"></p>
+    </div>
+
+    <div class="card">
+      <h2>Recent runs</h2>
+      <ul id="jump-runs" class="history-list"></ul>
+      <p class="empty" id="jump-runs-empty">🎮 No runs yet. Your scores will show up here.</p>
+    </div>
+
+    <div class="card">
+      <h2>Built from an REA model</h2>
+      <p class="hint" style="margin-top:0">
+        The original game was taken apart as <strong>Resources</strong>, <strong>Events</strong>
+        and <strong>Agents</strong>, and this version was rebuilt from that model.
+      </p>
+      <ul class="principle-list">
+        <li><strong>Resources.</strong> Altitude (your score), upward momentum, platforms,
+          boosters, and exactly one life.</li>
+        <li><strong>Events.</strong> Each one trades a resource for another. A bounce spends a
+          foothold to get momentum. Climbing spends momentum to get altitude. A jetpack spends
+          itself to get thrust. A brown platform takes your foothold and gives nothing back.</li>
+        <li><strong>Agents.</strong> You (tilt or touch), the doodler, the generator that lays
+          platforms, and the monsters that can take your life.</li>
+        <li><strong>The generator's rule.</strong> No gap between usable platforms is ever more
+          than 85% of a normal jump, so every run can be climbed. Difficulty rises with
+          altitude, not time.</li>
+      </ul>
+    </div>
+  </section>
+
 </main>
 
 <nav id="tabbar">
@@ -422,6 +491,7 @@
   <button class="tabbtn" data-tab="tab-lift"><span class="tab-icon">🏋️</span>Lift</button>
   <button class="tabbtn" data-tab="tab-focus"><span class="tab-icon">⏱️</span>Focus</button>
   <button class="tabbtn" data-tab="tab-tips"><span class="tab-icon">💡</span>Tips</button>
+  <button class="tabbtn" data-tab="tab-play"><span class="tab-icon">🎮</span>Jump</button>
 </nav>
 
 <div id="toast" role="status" aria-live="polite"></div>

@@ -51,6 +51,7 @@ const TAB_BODY_CLASS = {
   "tab-lift": "on-lift",
   "tab-focus": "on-focus",
   "tab-tips": "on-tips",
+  "tab-play": "on-play",
 };
 
 function activateTab(tabId, remember = true) {
@@ -61,6 +62,7 @@ function activateTab(tabId, remember = true) {
   // charts read --tab-accent, so redraw the newly visible one
   if (tabId === "tab-lift") renderLiftChart();
   if (tabId === "tab-focus") renderDwWeekChart();
+  if (tabId === "tab-play") jumpOnShow(); else jumpPause();
   if (remember) {
     save("dash.tab", tabId);
     history.replaceState(null, "", "#" + tabId.replace("tab-", ""));
@@ -1546,7 +1548,860 @@ function renderDwLog() {
   $("dw-empty").hidden = rows.length > 0;
 }
 
+/* ================================================================
+   SECTION 6 — JUMP (Doodle Jump, rebuilt from an REA model)
+
+   The original was reverse-engineered by watching how it behaves, not
+   by decompiling it, and the observations were sorted into McCarthy's
+   REA model (Resources, Events, Agents). The model decides how this
+   section is split up:
+   - RESOURCES are the quantities that events move: altitude (the score),
+     upward momentum, platforms, boosters, and the doodler's one life.
+   - EVENTS come in give/get pairs, which REA calls "duality". A bounce
+     spends a foothold to get momentum. Climbing spends momentum to get
+     altitude. A jetpack spends itself to get thrust. Every run keeps a
+     ledger of these events, and it's shown when the run ends.
+   - AGENTS take part in events: the player (input), the doodler (the
+     avatar), the generator (lays platforms) and the monsters.
+   The full model, and how each constant was chosen, is in docs/jump-rea.md.
+   ================================================================ */
+const JUMP = {
+  W: 320,                 // world width in units; the original iPhone screen was 320pt
+  GRAVITY: 1200,          // units/s²
+  BOUNCE_V: 600,          // apex v²/2g = 150 units, about a third of the screen
+  SPRING_V: 1000,         // apex ≈ 417 units, a bit under three normal jumps
+  BOOSTERS: {
+    propeller: { v: 480, secs: 2.5 },
+    jetpack:   { v: 860, secs: 3.0 },
+  },
+  MAX_VX: 380,            // crosses the screen in under a second
+  STEER_RATE: 10,         // how quickly vx closes on the target speed (1/s)
+  CAMERA_LINE: 0.42,      // the camera follows once the doodler rises above this
+  PLAT_W: 58, PLAT_H: 14,
+  BODY_W: 40, BODY_H: 40,
+  BULLET_V: 900, SHOT_GAP: 0.18,
+  REACH: 0.85,            // a usable gap never exceeds this share of a normal jump
+  FULL_DIFFICULTY: 25000, // altitude where the difficulty ramp tops out
+};
+const JUMP_APEX = JUMP.BOUNCE_V ** 2 / (2 * JUMP.GRAVITY); // 150
+const JUMP_STEP = 1 / 120; // fixed physics step, so a slow frame can't tunnel through a platform
+const JUMP_ITEM = {
+  spring:    { w: 16, h: 12 },
+  propeller: { w: 26, h: 16 },
+  jetpack:   { w: 24, h: 28 },
+};
+const JUMP_INK = {
+  paper: "#11151d", grid: "rgba(255,255,255,.045)",
+  static: "#34d399", moving: "#4f8cff", vanish: "#e6e9f2", brown: "#a8754a",
+  body: "#c9df4c", trunks: "#6f8f1e", outline: "#26300c",
+  hover: "#8b5cf6", patrol: "#ff5f70",
+};
+
+let jumpData = load("dash.jump", { best: 0, runs: [] }); // runs: [{ ts, score, cause, ledger }]
+let jumpSteerMode = load("dash.jumpsteer", "touch");      // "touch" | "tilt"
+let jumpState = null;
+let jumpView = null; // { cssW, cssH, dpr, scale }
+let jumpRaf = 0, jumpLastTs = 0, jumpAcc = 0;
+const jumpInput = { left: false, right: false, tilt: null, pointers: new Map() };
+let jumpTiltListening = false;
+
+/* ---------- geometry (the screen wraps left to right) ---------- */
+function jumpSpanOverlap(a0, aw, b0, bw) {
+  for (const off of [0, -JUMP.W, JUMP.W]) {
+    if (a0 + off < b0 + bw && a0 + off + aw > b0) return true;
+  }
+  return false;
+}
+function jumpBoxHit(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ay < by + bh && ay + ah > by && jumpSpanOverlap(ax, aw, bx, bw);
+}
+function jumpBob(m, t) {
+  return m.kind === "hover" && !m.dead ? Math.sin(t * 2.4 + m.phase) * 5 : 0;
+}
+
+/* ---------- agent: the generator ----------
+   Lays one platform the doodler can stand on per step, so the climbable
+   path is explicit. The gap to it is capped at REACH × a normal jump,
+   which is what makes every run climbable. Brown platforms are decoys in
+   the gaps and never count as the path. Difficulty is a function of
+   altitude only, so a slow climber gets the same course as a fast one. */
+function jumpPlatform(type, x, y) {
+  return { type, x, y, w: JUMP.PLAT_W, h: JUMP.PLAT_H, vx: 0, item: null,
+           broken: false, vy: 0, rot: 0, gone: false, fade: 1 };
+}
+
+function jumpSpawnStep(s) {
+  const g = s.gen;
+  const alt = s.startFeet - g.nextY;
+  const d = Math.min(1, alt / JUMP.FULL_DIFFICULTY);
+  const reach = JUMP_APEX * JUMP.REACH;
+  const gap = Math.min(reach, Math.max(g.minGap, (38 + 80 * d) * (0.75 + Math.random() * 0.5)));
+  const y = g.nextY - gap;
+  const afterMonster = g.minGap > 0;
+  g.minGap = 0;
+
+  const pMoving = alt < 1500 ? 0 : 0.1 + 0.35 * d;
+  const pVanish = alt < 4000 ? 0 : 0.05 + 0.15 * d;
+  const r = Math.random();
+  const type = r < pMoving ? "moving" : r < pMoving + pVanish ? "vanish" : "static";
+  const pl = jumpPlatform(type, Math.random() * (JUMP.W - JUMP.PLAT_W), y);
+  if (type === "moving") pl.vx = (40 + 90 * d) * (Math.random() < 0.5 ? -1 : 1);
+  if (type !== "vanish" && alt > 300) {
+    const ir = Math.random();
+    const kind = ir < 0.006 ? "jetpack"
+      : ir < 0.018 ? "propeller"
+      : ir < 0.018 + 0.07 - 0.03 * d ? "spring" : null;
+    if (kind) pl.item = { kind, dx: 6 + Math.random() * (JUMP.PLAT_W - 12 - JUMP_ITEM[kind].w), used: 0 };
+  }
+  s.platforms.push(pl);
+
+  if (!afterMonster && alt > 800 && gap > 50 && Math.random() < 0.12 + 0.25 * d) {
+    s.platforms.push(jumpPlatform("brown", Math.random() * (JUMP.W - JUMP.PLAT_W),
+                                  y + gap * (0.35 + Math.random() * 0.3)));
+  }
+
+  // monsters: spaced out, and parked on the other half from the platform
+  // just laid, so going straight up from it never runs into one
+  if (alt > 2500 && g.lastMonsterY - y > 700 && Math.random() < 0.035 + 0.06 * d) {
+    const kind = alt > 6000 && Math.random() < 0.5 ? "patrol" : "hover";
+    const w = 48, h = 34, half = JUMP.W / 2;
+    const x = pl.x + pl.w / 2 < half ? half + Math.random() * (half - w) : Math.random() * (half - w);
+    const vx = kind === "patrol" ? (50 + 50 * d) * (Math.random() < 0.5 ? -1 : 1) : 0;
+    s.monsters.push({ kind, x, y: y - h - 26, w, h, vx, phase: Math.random() * 6.28, dead: false, vy: 0, rot: 0 });
+    g.lastMonsterY = y;
+    g.minGap = h + 48; // keep the next platform clear of it, bob included
+  }
+  g.nextY = y;
+}
+
+function jumpFill(s) {
+  while (s.gen.nextY > s.camY - 140) jumpSpawnStep(s);
+}
+
+function jumpNewWorld() {
+  const viewH = jumpView ? JUMP.W * jumpView.cssH / jumpView.cssW : 480;
+  const groundY = -30;
+  const s = {
+    mode: "ready", viewH, camY: -viewH, t: 0,
+    doodler: { x: JUMP.W / 2 - JUMP.BODY_W / 2, y: groundY - JUMP.BODY_H, w: JUMP.BODY_W, h: JUMP.BODY_H,
+               vx: 0, vy: 0, face: 1, boost: null, stunned: false, shootT: 0, squash: 0 },
+    platforms: [jumpPlatform("static", JUMP.W / 2 - JUMP.PLAT_W / 2, groundY)],
+    monsters: [], bullets: [],
+    gen: { nextY: groundY, lastMonsterY: 0, minGap: 0 },
+    startFeet: groundY, score: 0, shotCooldown: 0, fallT: -1, cause: null,
+    // the run's REA ledger: one counter per kind of event
+    ledger: { bounces: 0, springs: 0, boosters: 0, broken: 0, stomped: 0, shot: 0 },
+  };
+  jumpFill(s);
+  return s;
+}
+
+/* ---------- agent: the player ---------- */
+function jumpSteerValue() {
+  const keys = (jumpInput.right ? 1 : 0) - (jumpInput.left ? 1 : 0);
+  if (keys) return keys;
+  if (jumpSteerMode === "tilt") {
+    const t = jumpInput.tilt;
+    if (t == null || Math.abs(t) < 1.5) return 0;
+    return Math.max(-1, Math.min(1, t / 20));
+  }
+  let sum = 0;
+  for (const z of jumpInput.pointers.values()) sum += z;
+  return Math.max(-1, Math.min(1, sum));
+}
+
+function jumpOnTilt(e) {
+  if (e.gamma == null) return;
+  const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+  jumpInput.tilt = angle === 90 ? e.beta
+    : angle === -90 || angle === 270 ? -e.beta
+    : angle === 180 ? -e.gamma : e.gamma;
+}
+
+/* iOS only hands over motion data after a tap asks for it */
+async function jumpEnableTilt() {
+  if (typeof DeviceOrientationEvent === "undefined") {
+    toast("This device doesn't report tilt");
+    return false;
+  }
+  if (typeof DeviceOrientationEvent.requestPermission === "function") {
+    try {
+      if (await DeviceOrientationEvent.requestPermission() !== "granted") {
+        toast("Motion access was declined — using touch");
+        return false;
+      }
+    } catch {
+      toast("Couldn't get motion access — using touch");
+      return false;
+    }
+  }
+  if (!jumpTiltListening) {
+    window.addEventListener("deviceorientation", jumpOnTilt);
+    jumpTiltListening = true;
+  }
+  return true;
+}
+
+/* ---------- events ---------- */
+// bounce: give a foothold (white platforms are single-use), get momentum.
+// A brown platform takes the foothold and gives nothing back.
+function jumpLand(s, pl) {
+  const p = s.doodler, L = s.ledger;
+  if (pl.type === "brown") {
+    pl.broken = true;
+    L.broken++;
+    return;
+  }
+  p.y = pl.y - p.h;
+  const it = pl.item;
+  if (it && it.kind === "spring" && jumpSpanOverlap(p.x + 9, p.w - 18, pl.x + it.dx, JUMP_ITEM.spring.w)) {
+    p.vy = -JUMP.SPRING_V;
+    it.used = 0.25;
+    L.springs++;
+  } else {
+    p.vy = -JUMP.BOUNCE_V;
+    L.bounces++;
+  }
+  p.squash = 0.12;
+  if (pl.type === "vanish") pl.gone = true;
+}
+
+// shoot: free ammo, rate-limited. Aim leans toward the tap, within ±35°.
+function jumpShoot(tx, ty) {
+  const s = jumpState;
+  if (!s || s.mode !== "playing" || s.doodler.stunned || s.fallT >= 0 || s.shotCooldown > 0) return;
+  const p = s.doodler;
+  const ox = p.x + p.w / 2, oy = p.y;
+  let th = 0; // radians from straight up
+  if (tx != null) th = Math.max(-0.6, Math.min(0.6, Math.atan2(tx - ox, oy - ty)));
+  s.bullets.push({ x: ox, y: oy, vx: Math.sin(th) * JUMP.BULLET_V, vy: -Math.cos(th) * JUMP.BULLET_V });
+  s.shotCooldown = JUMP.SHOT_GAP;
+  p.shootT = 0.25;
+}
+
+// hit by a monster: give the one life, get nothing. The run ends once
+// the doodler has dropped off the bottom.
+function jumpStun(s) {
+  const p = s.doodler;
+  p.stunned = true;
+  p.boost = null;
+  p.vx = 0;
+  p.vy = Math.max(p.vy, 120);
+  s.cause = "monster";
+  buzz(60);
+}
+
+function jumpUpdate(s, dt) {
+  s.t += dt;
+  const p = s.doodler, L = s.ledger;
+  const prevFeet = p.y + p.h;
+
+  if (!p.stunned) {
+    const steer = jumpSteerValue();
+    p.vx += (steer * JUMP.MAX_VX - p.vx) * Math.min(1, JUMP.STEER_RATE * dt);
+    if (Math.abs(steer) > 0.15) p.face = steer > 0 ? 1 : -1;
+  }
+  p.x += p.vx * dt;
+  const cx = p.x + p.w / 2;
+  if (cx < 0) p.x += JUMP.W;
+  else if (cx >= JUMP.W) p.x -= JUMP.W;
+
+  // climb: gravity spends momentum, height is what it buys. A booster
+  // replaces gravity with steady thrust until it runs out.
+  if (p.boost) {
+    p.vy = -JUMP.BOOSTERS[p.boost.kind].v;
+    if ((p.boost.left -= dt) <= 0) p.boost = null;
+  } else {
+    p.vy += JUMP.GRAVITY * dt;
+  }
+  p.y += p.vy * dt;
+  p.shootT = Math.max(0, p.shootT - dt);
+  p.squash = Math.max(0, p.squash - dt);
+  s.shotCooldown = Math.max(0, s.shotCooldown - dt);
+
+  for (const pl of s.platforms) {
+    if (pl.vx && !pl.broken) {
+      pl.x += pl.vx * dt;
+      if (pl.x < 0) { pl.x = 0; pl.vx = -pl.vx; }
+      else if (pl.x > JUMP.W - pl.w) { pl.x = JUMP.W - pl.w; pl.vx = -pl.vx; }
+    }
+    if (pl.broken) { pl.vy += JUMP.GRAVITY * dt; pl.y += pl.vy * dt; pl.rot += dt * 3; }
+    if (pl.gone) pl.fade = Math.max(0, pl.fade - dt * 4);
+    if (pl.item && pl.item.used) pl.item.used = Math.max(0, pl.item.used - dt);
+  }
+  for (const m of s.monsters) {
+    if (m.dead) { m.vy += JUMP.GRAVITY * dt; m.y += m.vy * dt; m.rot += dt * 4; continue; }
+    if (m.vx) {
+      m.x += m.vx * dt;
+      if (m.x < 0) { m.x = 0; m.vx = -m.vx; }
+      else if (m.x > JUMP.W - m.w) { m.x = JUMP.W - m.w; m.vx = -m.vx; }
+    }
+  }
+  for (const b of s.bullets) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    for (const m of s.monsters) {
+      if (m.dead) continue;
+      const my = m.y + jumpBob(m, s.t);
+      if (b.x > m.x && b.x < m.x + m.w && b.y > my && b.y < my + m.h) {
+        m.dead = true;
+        b.spent = true;
+        L.shot++;
+        break;
+      }
+    }
+  }
+  s.bullets = s.bullets.filter(b => !b.spent && b.y > s.camY - 30 && b.x > -20 && b.x < JUMP.W + 20);
+
+  if (!p.stunned) {
+    // platforms are one-way: they only catch the doodler on the way down
+    if (p.vy > 0) {
+      const feet = p.y + p.h;
+      for (const pl of s.platforms) {
+        if (pl.broken || pl.gone || prevFeet > pl.y || feet < pl.y) continue;
+        if (!jumpSpanOverlap(p.x + 9, p.w - 18, pl.x, pl.w)) continue;
+        jumpLand(s, pl);
+        break;
+      }
+    }
+    // pick up a booster: give the item, get thrust for a few seconds
+    for (const pl of s.platforms) {
+      const it = pl.item;
+      if (!it || it.kind === "spring" || pl.broken) continue;
+      const sz = JUMP_ITEM[it.kind];
+      if (jumpBoxHit(p.x + 6, p.y + 4, p.w - 12, p.h - 8, pl.x + it.dx, pl.y - sz.h, sz.w, sz.h)) {
+        p.boost = { kind: it.kind, left: JUMP.BOOSTERS[it.kind].secs };
+        pl.item = null;
+        L.boosters++;
+      }
+    }
+    // monsters: landing on one from above is a stomp, anything else costs
+    // the life. A booster flies straight through them.
+    for (const m of s.monsters) {
+      if (m.dead || p.boost) continue;
+      const my = m.y + jumpBob(m, s.t);
+      if (!jumpBoxHit(p.x + 6, p.y + 4, p.w - 12, p.h - 6, m.x + 4, my + 4, m.w - 8, m.h - 8)) continue;
+      if (p.vy > 0 && prevFeet <= my + 14) {
+        m.dead = true;
+        L.stomped++;
+        p.vy = -JUMP.BOUNCE_V;
+        p.squash = 0.12;
+      } else {
+        jumpStun(s);
+      }
+      break;
+    }
+  }
+
+  if (s.fallT < 0) {
+    // the camera only ever moves up; what drops below the screen is gone
+    const line = s.camY + s.viewH * JUMP.CAMERA_LINE;
+    if (p.y < line) s.camY = p.y - s.viewH * JUMP.CAMERA_LINE;
+    s.score = Math.max(s.score, Math.round(s.startFeet - (p.y + p.h)));
+    jumpFill(s);
+    const floor = s.camY + s.viewH + 60;
+    s.platforms = s.platforms.filter(pl => pl.y < floor && !(pl.gone && pl.fade <= 0));
+    s.monsters = s.monsters.filter(m => m.y < floor);
+    if (p.y > s.camY + s.viewH) {
+      s.fallT = 0;
+      if (!s.cause) s.cause = "fell";
+    }
+  } else {
+    // the fall: the camera chases the doodler down past everything, then the run ends
+    s.fallT += dt;
+    s.camY += (p.y - s.viewH * 0.55 - s.camY) * Math.min(1, 8 * dt);
+    if (s.fallT > 0.9) jumpGameOver(s);
+  }
+}
+
+/* ---------- drawing ---------- */
+function jumpRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function jumpDrawPlatform(ctx, pl) {
+  ctx.save();
+  if (pl.gone) ctx.globalAlpha = pl.fade;
+  ctx.fillStyle = JUMP_INK[pl.type];
+  ctx.strokeStyle = "rgba(0,0,0,.4)";
+  ctx.lineWidth = 1.5;
+  if (pl.broken) {
+    // the two halves tumble apart
+    const hw = pl.w / 2;
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.translate(pl.x + hw + side * (hw / 2 + pl.rot * 8), pl.y + pl.h / 2);
+      ctx.rotate(side * pl.rot);
+      jumpRoundRect(ctx, -hw / 2, -pl.h / 2, hw - 2, pl.h, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  } else {
+    jumpRoundRect(ctx, pl.x, pl.y, pl.w, pl.h, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,.3)";
+    ctx.fillRect(pl.x + 7, pl.y + 3, pl.w - 14, 2);
+    if (pl.type === "brown") {
+      ctx.strokeStyle = "rgba(40,20,5,.7)";
+      ctx.beginPath();
+      ctx.moveTo(pl.x + pl.w / 2 - 3, pl.y + 2);
+      ctx.lineTo(pl.x + pl.w / 2 + 2, pl.y + 7);
+      ctx.lineTo(pl.x + pl.w / 2 - 2, pl.y + pl.h - 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  if (pl.item && !pl.broken) jumpDrawItem(ctx, pl);
+}
+
+function jumpDrawItem(ctx, pl) {
+  const it = pl.item, sz = JUMP_ITEM[it.kind];
+  const x = pl.x + it.dx;
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  if (it.kind === "spring") {
+    const h = it.used ? 7 : sz.h;
+    const top = pl.y - h;
+    ctx.strokeStyle = "#b8bfcf";
+    ctx.beginPath();
+    for (let i = 0; i <= 4; i++) ctx.lineTo(x + (i % 2 ? sz.w - 2 : 2), top + 2 + (h - 4) * i / 4);
+    ctx.stroke();
+    ctx.fillStyle = "#dfe4ee";
+    ctx.fillRect(x, top, sz.w, 2.5);
+  } else if (it.kind === "propeller") {
+    const top = pl.y - sz.h;
+    ctx.fillStyle = "#ff9f45";
+    ctx.beginPath();
+    ctx.arc(x + sz.w / 2, pl.y - 1, sz.w / 2 - 2, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = "#4f8cff";
+    ctx.fillRect(x + sz.w / 2 - 1, top + 2, 2, 4);
+    ctx.fillRect(x + 2, top, sz.w - 4, 2.5);
+  } else {
+    const top = pl.y - sz.h;
+    ctx.fillStyle = "#9aa3b5";
+    jumpRoundRect(ctx, x + 1, top, 9, sz.h - 4, 4); ctx.fill();
+    jumpRoundRect(ctx, x + sz.w - 10, top, 9, sz.h - 4, 4); ctx.fill();
+    ctx.fillStyle = "#ff9f45";
+    ctx.fillRect(x + 3, pl.y - 5, 5, 4);
+    ctx.fillRect(x + sz.w - 8, pl.y - 5, 5, 4);
+  }
+  ctx.restore();
+}
+
+function jumpDrawMonster(ctx, m, t) {
+  const y = m.y + jumpBob(m, t);
+  ctx.save();
+  ctx.translate(m.x + m.w / 2, y + m.h / 2);
+  if (m.dead) { ctx.rotate(m.rot); ctx.globalAlpha = 0.7; }
+  ctx.fillStyle = JUMP_INK[m.kind];
+  ctx.strokeStyle = "rgba(0,0,0,.45)";
+  ctx.lineWidth = 1.5;
+  if (m.kind === "hover") {
+    const flap = Math.sin(t * 14 + m.phase) * 5;
+    ctx.beginPath(); ctx.ellipse(-25, -4 + flap, 9, 5, -0.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(25, -4 + flap, 9, 5, 0.4, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath();
+    for (const lx of [-15, -5, 5, 15]) {
+      const kick = Math.sin(t * 12 + lx) * 3;
+      ctx.moveTo(lx, 10); ctx.lineTo(lx + kick, 19);
+    }
+    ctx.strokeStyle = JUMP_INK.patrol; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,.45)"; ctx.lineWidth = 1.5;
+  }
+  ctx.beginPath();
+  ctx.ellipse(0, 0, m.w / 2 - 4, m.h / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // eyes
+  ctx.fillStyle = "#fff";
+  const eyes = m.kind === "hover" ? [-8, 8] : [0];
+  for (const ex of eyes) { ctx.beginPath(); ctx.arc(ex, -4, m.kind === "hover" ? 5 : 7, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = "#11151d";
+  for (const ex of eyes) { ctx.beginPath(); ctx.arc(ex + 1, -3, m.kind === "hover" ? 2.2 : 3, 0, Math.PI * 2); ctx.fill(); }
+  // teeth
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  for (let i = -2; i <= 2; i++) { ctx.moveTo(i * 5 - 2.5, 7); ctx.lineTo(i * 5, 11); ctx.lineTo(i * 5 + 2.5, 7); }
+  ctx.fill();
+  ctx.restore();
+}
+
+function jumpDrawDoodler(ctx, s, x) {
+  const p = s.doodler, ink = JUMP_INK;
+  ctx.save();
+  ctx.translate(x + p.w / 2, p.y + p.h); // origin at the feet
+  const sq = p.squash / 0.12;
+  ctx.scale(1 + 0.12 * sq, 1 - 0.14 * sq);
+  const up = p.shootT > 0;
+  if (p.face < 0 && !up) ctx.scale(-1, 1);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  if (p.boost && p.boost.kind === "jetpack") {
+    const flame = 8 + Math.random() * 6;
+    ctx.fillStyle = "#ffc247";
+    ctx.beginPath(); ctx.moveTo(-23, -12); ctx.lineTo(-19, -12 + flame); ctx.lineTo(-15, -12); ctx.fill();
+    ctx.fillStyle = "#9aa3b5";
+    jumpRoundRect(ctx, -24, -34, 9, 22, 4); ctx.fill();
+  }
+
+  ctx.strokeStyle = ink.outline;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  for (const lx of [-10, -3, 4, 11]) { ctx.moveTo(lx, -8); ctx.lineTo(lx, -1); ctx.lineTo(lx + 3, -1); }
+  ctx.stroke();
+
+  ctx.fillStyle = ink.body;
+  ctx.beginPath();
+  ctx.moveTo(-15, -8);
+  ctx.lineTo(-15, -26);
+  ctx.quadraticCurveTo(-15, -40, 0, -40);
+  ctx.quadraticCurveTo(15, -40, 15, -26);
+  ctx.lineTo(15, -8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = ink.trunks;
+  ctx.fillRect(-16, -15, 32, 8);
+  ctx.strokeStyle = ink.body;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let sx = -11; sx <= 11; sx += 5.5) { ctx.moveTo(sx, -15); ctx.lineTo(sx, -7); }
+  ctx.stroke();
+  ctx.restore();
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+
+  // snout: points the way it faces, or straight up while shooting
+  ctx.fillStyle = ink.body;
+  if (up) {
+    jumpRoundRect(ctx, -4, -52, 8, 15, 3);
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, -52, 5, 2, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else {
+    jumpRoundRect(ctx, 11, -31, 14, 8, 3);
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(25, -27, 2, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  ctx.fillStyle = ink.outline;
+  const eyes = up ? [[-5, -31], [5, -31]] : [[2, -30], [8, -30]];
+  for (const [ex, ey] of eyes) { ctx.beginPath(); ctx.arc(ex, ey, 1.9, 0, Math.PI * 2); ctx.fill(); }
+
+  if (p.boost && p.boost.kind === "propeller") {
+    ctx.fillStyle = "#ff9f45";
+    ctx.beginPath(); ctx.arc(0, -39, 10, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = "#4f8cff";
+    const blade = 16 * Math.abs(Math.cos(s.t * 30));
+    ctx.fillRect(-1, -54, 2, 6);
+    ctx.fillRect(-blade, -55, blade * 2, 2.5);
+  }
+  if (p.stunned) {
+    ctx.fillStyle = "#ffc247";
+    for (let k = 0; k < 3; k++) {
+      const a = s.t * 6 + k * 2.094;
+      ctx.beginPath(); ctx.arc(Math.cos(a) * 14, -47 + Math.sin(a) * 4, 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function jumpDraw() {
+  const s = jumpState, v = jumpView;
+  if (!s || !v) return;
+  const ctx = $("jump-canvas").getContext("2d");
+  ctx.setTransform(v.dpr * v.scale, 0, 0, v.dpr * v.scale, 0, 0);
+
+  // graph paper that scrolls with the world
+  ctx.fillStyle = JUMP_INK.paper;
+  ctx.fillRect(0, 0, JUMP.W, s.viewH);
+  ctx.strokeStyle = JUMP_INK.grid;
+  ctx.lineWidth = 1 / v.scale;
+  ctx.beginPath();
+  for (let gx = 20; gx < JUMP.W; gx += 20) { ctx.moveTo(gx, 0); ctx.lineTo(gx, s.viewH); }
+  for (let gy = -(((s.camY % 20) + 20) % 20); gy < s.viewH; gy += 20) { ctx.moveTo(0, gy); ctx.lineTo(JUMP.W, gy); }
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(0, -s.camY);
+  // your best so far, marked at the height you reached it
+  if (jumpData.best > 0) {
+    const by = s.startFeet - jumpData.best;
+    if (by > s.camY && by < s.camY + s.viewH) {
+      ctx.strokeStyle = "rgba(244,114,182,.55)";
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(0, by); ctx.lineTo(JUMP.W, by); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(244,114,182,.85)";
+      ctx.font = "800 10px system-ui, -apple-system, sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText("BEST", JUMP.W - 6, by - 4);
+    }
+  }
+  for (const pl of s.platforms) jumpDrawPlatform(ctx, pl);
+  for (const m of s.monsters) jumpDrawMonster(ctx, m, s.t);
+  ctx.fillStyle = "#eef0f6";
+  for (const b of s.bullets) { ctx.beginPath(); ctx.arc(b.x, b.y, 3.5, 0, Math.PI * 2); ctx.fill(); }
+  const p = s.doodler;
+  jumpDrawDoodler(ctx, s, p.x);
+  if (p.x < 6) jumpDrawDoodler(ctx, s, p.x + JUMP.W);
+  if (p.x + p.w > JUMP.W - 6) jumpDrawDoodler(ctx, s, p.x - JUMP.W);
+  ctx.restore();
+
+  // HUD
+  ctx.font = "800 22px system-ui, -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(0,0,0,.45)";
+  ctx.fillText(s.score.toLocaleString(), 13, 31);
+  ctx.fillStyle = "#eef0f6";
+  ctx.fillText(s.score.toLocaleString(), 12, 30);
+  if (jumpSteerMode === "touch" && s.mode === "playing") {
+    const y = s.viewH - 24;
+    ctx.fillStyle = "rgba(255,255,255,.13)";
+    ctx.font = "800 18px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("◀", JUMP.W * 0.2, y);
+    ctx.fillText("▶", JUMP.W * 0.8, y);
+    ctx.beginPath(); ctx.arc(JUMP.W / 2, y - 6, 4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+/* ---------- loop, sizing, run lifecycle ---------- */
+function jumpLoop(ts) {
+  jumpRaf = 0;
+  const s = jumpState;
+  if (!s || s.mode !== "playing") return;
+  jumpAcc += Math.min(0.1, (ts - jumpLastTs) / 1000);
+  jumpLastTs = ts;
+  while (jumpAcc >= JUMP_STEP && s.mode === "playing") {
+    jumpUpdate(s, JUMP_STEP);
+    jumpAcc -= JUMP_STEP;
+  }
+  jumpDraw();
+  if (s.mode === "playing") jumpRaf = requestAnimationFrame(jumpLoop);
+}
+function jumpStartLoop() {
+  if (jumpRaf) return;
+  jumpLastTs = performance.now();
+  jumpAcc = 0;
+  jumpRaf = requestAnimationFrame(jumpLoop);
+}
+
+function jumpResize() {
+  const c = $("jump-canvas");
+  const cssW = c.parentElement.clientWidth;
+  if (!cssW) return false; // tab hidden
+  const top = c.parentElement.getBoundingClientRect().top + window.scrollY;
+  const avail = window.innerHeight - top - $("tabbar").offsetHeight - 14;
+  const cssH = Math.round(Math.max(380, Math.min(avail, cssW * 1.7)));
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  c.style.height = cssH + "px";
+  c.width = Math.round(cssW * dpr);
+  c.height = Math.round(cssH * dpr);
+  jumpView = { cssW, cssH, dpr, scale: cssW / JUMP.W };
+  if (jumpState) {
+    jumpState.viewH = JUMP.W * cssH / cssW;
+    jumpFill(jumpState);
+  }
+  return true;
+}
+
+function jumpShowOverlay(kind, isBest = false) {
+  const s = jumpState;
+  $("jump-overlay").hidden = false;
+  $("jump-pause").hidden = true;
+  $("jump-final").hidden = kind === "ready";
+  $("jump-final").textContent = s ? s.score.toLocaleString() : "0";
+  $("jump-ledger-wrap").hidden = kind !== "over";
+  if (kind === "paused") {
+    $("jump-kicker").textContent = "Paused";
+    $("jump-sub").textContent = "Your run is waiting where you left it.";
+    $("jump-go").textContent = "Resume";
+  } else if (kind === "over") {
+    const L = s.ledger;
+    $("jump-kicker").textContent = isBest ? "New best!" : "Run over";
+    $("jump-sub").textContent = s.cause === "monster"
+      ? "A monster got you. Land on its head or shoot it first."
+      : "You fell off the bottom. The screen never scrolls back down.";
+    $("jump-ledger").innerHTML = [
+      ["Bounces", L.bounces], ["Springs", L.springs], ["Boosters", L.boosters],
+      ["Broke", L.broken], ["Stomped", L.stomped], ["Shot", L.shot],
+    ].map(([k, n]) => `<div class="stat-box"><span class="stat-num">${n}</span><span class="stat-label">${k}</span></div>`).join("");
+    $("jump-go").textContent = "Play again";
+  } else {
+    $("jump-kicker").textContent = "Endless climber";
+    $("jump-sub").textContent = "Land on platforms to bounce. Climb as high as you can and don't fall off the bottom.";
+    $("jump-go").textContent = "Play";
+  }
+}
+
+async function jumpGo() {
+  const s = jumpState;
+  if (s && s.mode === "paused") { jumpResume(); return; }
+  if (jumpSteerMode === "tilt" && !jumpTiltListening && !(await jumpEnableTilt())) {
+    jumpSteerMode = "touch";
+    save("dash.jumpsteer", jumpSteerMode);
+    renderJumpSteer();
+  }
+  jumpResize();
+  jumpState = jumpNewWorld();
+  jumpState.mode = "playing";
+  jumpState.doodler.vy = -JUMP.BOUNCE_V;
+  jumpInput.pointers.clear();
+  if (document.activeElement) document.activeElement.blur();
+  $("jump-overlay").hidden = true;
+  $("jump-pause").hidden = false;
+  jumpStartLoop();
+}
+
+function jumpPause() {
+  const s = jumpState;
+  if (!s || s.mode !== "playing") return;
+  s.mode = "paused";
+  jumpInput.pointers.clear();
+  jumpInput.left = jumpInput.right = false;
+  jumpShowOverlay("paused");
+}
+function jumpResume() {
+  const s = jumpState;
+  if (!s || s.mode !== "paused") return;
+  s.mode = "playing";
+  $("jump-overlay").hidden = true;
+  $("jump-pause").hidden = false;
+  jumpStartLoop();
+}
+
+function jumpGameOver(s) {
+  s.mode = "over";
+  const isBest = s.score > jumpData.best;
+  if (isBest) jumpData.best = s.score;
+  jumpData.runs.unshift({ ts: Date.now(), score: s.score, cause: s.cause || "fell", ledger: s.ledger });
+  jumpData.runs = jumpData.runs.slice(0, 20);
+  save("dash.jump", jumpData);
+  renderJumpMeta();
+  jumpShowOverlay("over", isBest);
+  if (isBest) popEl($("jump-best"));
+}
+
+function jumpOnShow() {
+  window.scrollTo(0, 0);
+  if (!jumpResize()) return;
+  if (!jumpState || jumpState.mode === "ready") {
+    jumpState = jumpNewWorld();
+    jumpShowOverlay("ready");
+  }
+  jumpDraw();
+}
+
+/* ---------- rendering the cards around the game ---------- */
+function renderJumpMeta() {
+  $("jump-best").textContent = jumpData.best.toLocaleString();
+  const rows = jumpData.runs.slice(0, 6);
+  $("jump-runs").innerHTML = rows.map(r => {
+    const when = new Date(r.ts);
+    const how = r.cause === "monster" ? "caught by a monster" : "fell";
+    const best = jumpData.best > 0 && r.score === jumpData.best ? ' <span class="jump-best-tag">best</span>' : "";
+    return `
+    <li>
+      <div class="row-main">
+        <span><strong>${r.score.toLocaleString()}</strong>${best}</span>
+        <span class="row-sub">${when.toLocaleDateString([], { day: "numeric", month: "short" })} ${fmtTime(r.ts)}</span>
+      </div>
+      <div class="row-sub">${how} · ${r.ledger.bounces + r.ledger.springs} bounces · ${r.ledger.stomped + r.ledger.shot} monsters</div>
+    </li>`;
+  }).join("");
+  $("jump-runs-empty").hidden = rows.length > 0;
+}
+
+function renderJumpSteer() {
+  document.querySelectorAll("#jump-steer-toggle .seg").forEach(b =>
+    b.classList.toggle("active", b.dataset.steer === jumpSteerMode));
+  $("jump-steer-hint").textContent = jumpSteerMode === "tilt"
+    ? "Tilt the phone to steer, like the original. Tap anywhere on the game to shoot toward your finger."
+    : "Hold the left or right side of the game to steer, and tap the middle to shoot. With a keyboard, use ← → to steer and space to shoot.";
+}
+
+/* ---------- wiring ---------- */
+$("jump-go").addEventListener("click", jumpGo);
+$("jump-pause").addEventListener("click", jumpPause);
+
+$("jump-steer-toggle").addEventListener("click", async (e) => {
+  const b = e.target.closest(".seg");
+  if (!b || b.dataset.steer === jumpSteerMode) return;
+  if (b.dataset.steer === "tilt" && !(await jumpEnableTilt())) return;
+  jumpSteerMode = b.dataset.steer;
+  save("dash.jumpsteer", jumpSteerMode);
+  jumpInput.pointers.clear();
+  renderJumpSteer();
+});
+
+{
+  const c = $("jump-canvas");
+  const zoneAt = (e) => {
+    const r = c.getBoundingClientRect();
+    return (e.clientX - r.left) / r.width;
+  };
+  c.addEventListener("pointerdown", (e) => {
+    const s = jumpState;
+    if (!s || s.mode !== "playing") return;
+    e.preventDefault();
+    const fx = zoneAt(e);
+    if (jumpSteerMode === "tilt") {
+      const r = c.getBoundingClientRect();
+      jumpShoot(fx * JUMP.W, s.camY + ((e.clientY - r.top) / r.height) * s.viewH);
+      return;
+    }
+    if (fx > 0.4 && fx < 0.6) { jumpShoot(); return; }
+    jumpInput.pointers.set(e.pointerId, fx < 0.5 ? -1 : 1);
+    try { c.setPointerCapture(e.pointerId); } catch { /* capture is best-effort */ }
+  });
+  c.addEventListener("pointermove", (e) => {
+    if (jumpInput.pointers.has(e.pointerId)) jumpInput.pointers.set(e.pointerId, zoneAt(e) < 0.5 ? -1 : 1);
+  });
+  const release = (e) => jumpInput.pointers.delete(e.pointerId);
+  c.addEventListener("pointerup", release);
+  c.addEventListener("pointercancel", release);
+}
+
+const JUMP_KEYS = { ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right" };
+window.addEventListener("keydown", (e) => {
+  if (!document.body.classList.contains("on-play")) return;
+  const s = jumpState;
+  const playing = s && s.mode === "playing";
+  if (JUMP_KEYS[e.code]) {
+    jumpInput[JUMP_KEYS[e.code]] = true;
+    if (playing) e.preventDefault();
+  } else if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") {
+    if (playing) { e.preventDefault(); jumpShoot(); }
+    else if (e.code === "Space" && !e.repeat && document.activeElement?.tagName !== "BUTTON") { e.preventDefault(); jumpGo(); }
+  } else if (e.code === "KeyP" || e.code === "Escape") {
+    if (playing) jumpPause(); else if (s && s.mode === "paused") jumpResume();
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (JUMP_KEYS[e.code]) jumpInput[JUMP_KEYS[e.code]] = false;
+});
+
+document.addEventListener("visibilitychange", () => { if (document.hidden) jumpPause(); });
+window.addEventListener("resize", () => {
+  if (!document.body.classList.contains("on-play")) return;
+  if (jumpResize()) jumpDraw();
+});
+
 /* ---------------- initial render ---------------- */
+renderJumpMeta();
+renderJumpSteer();
 renderLearnStats();
 renderLearningList();
 renderHabits();

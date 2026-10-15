@@ -47,6 +47,7 @@ body.on-habits { --tab-accent: #34d399; --tab-accent-2: #14b8a6; }
 body.on-tips   { --tab-accent: #fbbf24; --tab-accent-2: #f59e0b; }
 body.on-lift   { --tab-accent: #ff9f45; --tab-accent-2: #ff5f70; }
 body.on-focus  { --tab-accent: #4f8cff; --tab-accent-2: #22d3ee; }
+body.on-play   { --tab-accent: #f472b6; --tab-accent-2: #a855f7; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -635,6 +636,54 @@ svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
   min-height: 1.2em; font-weight: 600;
 }
 .chart-tip strong { color: var(--text); font-weight: 800; }
+
+/* ---------------- jump ---------------- */
+.jump-card { padding: 0; overflow: hidden; }
+.jump-stage { position: relative; }
+#jump-canvas {
+  display: block; width: 100%; height: 480px;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+}
+.jump-pause {
+  position: absolute; top: 10px; right: 10px;
+  width: 38px; height: 38px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: rgba(12, 15, 22, .7);
+  color: var(--text); font-size: .74rem; font-weight: 800;
+  cursor: pointer; touch-action: manipulation;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.jump-overlay {
+  position: absolute; inset: 0; padding: 18px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 12, 18, .55);
+}
+.jump-panel {
+  width: 100%; max-width: 300px; text-align: center;
+  background: linear-gradient(180deg, var(--card), #12161e);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 20px 16px; box-shadow: var(--shadow);
+  animation: rise .3s cubic-bezier(.2,.7,.3,1);
+}
+.jump-kicker {
+  font-size: .72rem; font-weight: 800; color: var(--tab-accent);
+  text-transform: uppercase; letter-spacing: .09em;
+}
+.jump-score {
+  font-size: 2.6rem; font-weight: 800; letter-spacing: -.02em; line-height: 1.1;
+  font-variant-numeric: tabular-nums; margin-top: 4px;
+}
+.jump-panel .hint { margin: 8px 0 14px; }
+.jump-ledger-wrap h2 { margin-bottom: 8px; }
+.jump-ledger { gap: 6px; margin-bottom: 14px; }
+.jump-ledger .stat-box { padding: 8px 4px; }
+.jump-ledger .stat-num { font-size: 1.05rem; }
+.jump-best-tag {
+  display: inline-block; vertical-align: 2px; margin-left: 6px;
+  border-radius: 999px; padding: 2px 8px;
+  font-size: .58rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+  background: color-mix(in srgb, var(--tab-accent) 20%, transparent); color: var(--tab-accent);
+}
 
 /* ---------------- tab bar ---------------- */
 #tabbar {
